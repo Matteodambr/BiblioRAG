@@ -42,6 +42,26 @@ def setup_query_parser(subparsers: Any) -> None:
     query_parser.set_defaults(func=cmd_query)
 
 
+def setup_test_parser(subparsers: Any) -> None:
+    """Set up the test subcommand."""
+    test_parser = subparsers.add_parser(
+        "test",
+        help="Test embedding and LLM connections",
+        description="Test that the embedding model and LLM are working correctly.",
+    )
+    test_parser.add_argument(
+        "--embedding-only",
+        action="store_true",
+        help="Only test the embedding model",
+    )
+    test_parser.add_argument(
+        "--llm-only",
+        action="store_true",
+        help="Only test the LLM",
+    )
+    test_parser.set_defaults(func=cmd_test)
+
+
 def cmd_auth(args: argparse.Namespace) -> int:
     """Handle the auth command."""
     config = Config.from_env()
@@ -130,6 +150,184 @@ async def _async_query(config: Config, question: str) -> int:
         return 1
 
 
+def cmd_test(args: argparse.Namespace) -> int:
+    """Handle the test command."""
+    config = Config.from_env()
+    
+    test_embedding = not args.llm_only
+    test_llm = not args.embedding_only
+    
+    results = []
+    
+    if test_embedding:
+        print("\n" + "=" * 60)
+        print("TESTING EMBEDDING MODEL")
+        print("=" * 60)
+        embedding_result = _test_embedding(config)
+        results.append(("Embedding", embedding_result))
+    
+    if test_llm:
+        print("\n" + "=" * 60)
+        print("TESTING LLM (Gemini)")
+        print("=" * 60)
+        llm_result = _test_llm(config)
+        results.append(("LLM", llm_result))
+    
+    # Print summary
+    print("\n" + "=" * 60)
+    print("TEST SUMMARY")
+    print("=" * 60)
+    all_passed = True
+    for name, passed in results:
+        status = "✓ PASSED" if passed else "✗ FAILED"
+        print(f"  {name}: {status}")
+        if not passed:
+            all_passed = False
+    
+    return 0 if all_passed else 1
+
+
+def _test_embedding(config: Config) -> bool:
+    """Test the embedding model connection.
+    
+    Returns:
+        True if test passed, False otherwise.
+    """
+    embedding_config = config.embedding
+    print(f"\nProvider: {embedding_config.provider}")
+    print(f"Model: {embedding_config.model_name}")
+    
+    if embedding_config.provider == "ollama":
+        print(f"Ollama URL: {embedding_config.ollama_url}")
+        return _test_ollama_embedding(embedding_config)
+    elif embedding_config.provider == "google":
+        return _test_google_embedding(config)
+    else:
+        print(f"Unknown embedding provider: {embedding_config.provider}")
+        return False
+
+
+def _test_ollama_embedding(embedding_config: Any) -> bool:
+    """Test Ollama embedding model."""
+    import requests
+    
+    test_text = "This is a test sentence to generate embeddings."
+    
+    print(f"\nTesting embedding generation...")
+    print(f"  Input text: \"{test_text}\"")
+    
+    try:
+        # Test Ollama server connection
+        url = f"{embedding_config.ollama_url}/api/embeddings"
+        payload = {
+            "model": embedding_config.model_name,
+            "prompt": test_text,
+        }
+        
+        response = requests.post(url, json=payload, timeout=30)
+        response.raise_for_status()
+        
+        result = response.json()
+        embedding = result.get("embedding", [])
+        
+        if embedding:
+            print(f"  ✓ Embedding generated successfully!")
+            print(f"  Embedding dimensions: {len(embedding)}")
+            print(f"  First 5 values: {embedding[:5]}")
+            return True
+        else:
+            print("  ✗ No embedding returned")
+            return False
+            
+    except requests.exceptions.ConnectionError:
+        print(f"  ✗ Cannot connect to Ollama at {embedding_config.ollama_url}")
+        print("  Make sure Ollama is running: ollama serve")
+        return False
+    except requests.exceptions.HTTPError as e:
+        if e.response.status_code == 404:
+            print(f"  ✗ Model '{embedding_config.model_name}' not found")
+            print(f"  Pull the model: ollama pull {embedding_config.model_name}")
+        else:
+            print(f"  ✗ HTTP error: {e}")
+        return False
+    except Exception as e:
+        print(f"  ✗ Error: {e}")
+        return False
+
+
+def _test_google_embedding(config: Config) -> bool:
+    """Test Google embedding model."""
+    print("\n  Testing Google embedding...")
+    
+    if not config.gemini.api_key:
+        print("  ✗ GEMINI_API_KEY not set")
+        return False
+    
+    try:
+        import google.generativeai as genai
+        
+        genai.configure(api_key=config.gemini.api_key)
+        
+        test_text = "This is a test sentence to generate embeddings."
+        print(f"  Input text: \"{test_text}\"")
+        
+        result = genai.embed_content(
+            model=config.embedding.model_name,
+            content=test_text,
+        )
+        
+        embedding = result.get("embedding", [])
+        if embedding:
+            print(f"  ✓ Embedding generated successfully!")
+            print(f"  Embedding dimensions: {len(embedding)}")
+            print(f"  First 5 values: {embedding[:5]}")
+            return True
+        else:
+            print("  ✗ No embedding returned")
+            return False
+            
+    except Exception as e:
+        print(f"  ✗ Error: {e}")
+        return False
+
+
+def _test_llm(config: Config) -> bool:
+    """Test the LLM (Gemini) connection.
+    
+    Returns:
+        True if test passed, False otherwise.
+    """
+    print(f"\nModel: {config.gemini.model_name}")
+    
+    if not config.gemini.api_key:
+        print("  ✗ GEMINI_API_KEY not set")
+        return False
+    
+    test_prompt = "Reply with exactly: 'Hello, BiblioRAG test successful!'"
+    print(f"\nTesting LLM response generation...")
+    print(f"  Prompt: \"{test_prompt}\"")
+    
+    try:
+        import google.generativeai as genai
+        
+        genai.configure(api_key=config.gemini.api_key)
+        
+        model = genai.GenerativeModel(config.gemini.model_name)
+        response = model.generate_content(test_prompt)
+        
+        if response and response.text:
+            print(f"  ✓ LLM response received!")
+            print(f"  Response: \"{response.text.strip()}\"")
+            return True
+        else:
+            print("  ✗ No response generated")
+            return False
+            
+    except Exception as e:
+        print(f"  ✗ Error: {e}")
+        return False
+
+
 def create_parser() -> argparse.ArgumentParser:
     """Create the argument parser."""
     parser = argparse.ArgumentParser(
@@ -150,6 +348,7 @@ def create_parser() -> argparse.ArgumentParser:
     
     setup_auth_parser(subparsers)
     setup_query_parser(subparsers)
+    setup_test_parser(subparsers)
     
     return parser
 

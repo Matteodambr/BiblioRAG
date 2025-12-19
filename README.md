@@ -106,9 +106,27 @@ conda activate bibliorag
 
 ## Usage
 
-### 1. Authenticate with Mendeley
+### 1. Test Your Setup
 
-First, authenticate with Mendeley to get access tokens:
+Before using BiblioRAG, verify that your embedding model and LLM are working:
+
+```bash
+bibliorag test
+```
+
+This will test:
+- **Embedding model**: Connects to Ollama and generates a test embedding
+- **LLM (Gemini)**: Sends a test prompt and verifies the response
+
+You can also test them individually:
+```bash
+bibliorag test --embedding-only  # Test only the embedding model
+bibliorag test --llm-only        # Test only the LLM
+```
+
+### 2. Authenticate with Mendeley
+
+Authenticate with Mendeley to get access tokens:
 
 ```bash
 bibliorag auth
@@ -116,7 +134,7 @@ bibliorag auth
 
 Follow the prompts to complete OAuth2 authentication. Save the tokens in your `.env` file.
 
-### 2. Query Your References
+### 3. Query Your References
 
 Ask questions about your papers (references are automatically synced):
 
