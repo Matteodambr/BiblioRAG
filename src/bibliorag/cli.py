@@ -3,7 +3,7 @@ import argparse
 import asyncio
 import logging
 import sys
-from typing import Any, Optional
+from typing import Any
 
 from bibliorag.config import Config
 from bibliorag.mendeley_client import MendeleyClient
@@ -27,16 +27,6 @@ def setup_auth_parser(subparsers: Any) -> None:
     auth_parser.set_defaults(func=cmd_auth)
 
 
-def setup_sync_parser(subparsers: Any) -> None:
-    """Set up the sync subcommand."""
-    sync_parser = subparsers.add_parser(
-        "sync",
-        help="Sync references from Mendeley",
-        description="Download new or updated references from Mendeley library.",
-    )
-    sync_parser.set_defaults(func=cmd_sync)
-
-
 def setup_query_parser(subparsers: Any) -> None:
     """Set up the query subcommand."""
     query_parser = subparsers.add_parser(
@@ -50,32 +40,6 @@ def setup_query_parser(subparsers: Any) -> None:
         help="The question to ask about your references",
     )
     query_parser.set_defaults(func=cmd_query)
-
-
-def setup_summarize_parser(subparsers: Any) -> None:
-    """Set up the summarize subcommand."""
-    summarize_parser = subparsers.add_parser(
-        "summarize",
-        help="Summarize your references",
-        description="Generate a summary of your references.",
-    )
-    summarize_parser.add_argument(
-        "--focus",
-        type=str,
-        default=None,
-        help="Optional focus question for the summary",
-    )
-    summarize_parser.set_defaults(func=cmd_summarize)
-
-
-def setup_contradictions_parser(subparsers: Any) -> None:
-    """Set up the contradictions subcommand."""
-    contradictions_parser = subparsers.add_parser(
-        "contradictions",
-        help="Find contradictions in your references",
-        description="Identify contradictions or disagreements across documents.",
-    )
-    contradictions_parser.set_defaults(func=cmd_contradictions)
 
 
 def cmd_auth(args: argparse.Namespace) -> int:
@@ -116,39 +80,6 @@ def cmd_auth(args: argparse.Namespace) -> int:
         return 0
     except Exception as e:
         print(f"Error during authentication: {e}")
-        return 1
-
-
-def cmd_sync(args: argparse.Namespace) -> int:
-    """Handle the sync command."""
-    config = Config.from_env()
-    
-    if not config.mendeley.access_token:
-        print("Error: Not authenticated with Mendeley.")
-        print("Run 'bibliorag auth' first to authenticate.")
-        return 1
-    
-    client = MendeleyClient(config)
-    
-    try:
-        updated_docs, downloaded_files = client.sync_references()
-        
-        if not updated_docs:
-            print("No new or updated documents found.")
-        else:
-            print(f"\nUpdated {len(updated_docs)} documents:")
-            for doc in updated_docs:
-                print(f"  - {doc.title}")
-            
-            if downloaded_files:
-                print(f"\nDownloaded {len(downloaded_files)} files to '{config.references_dir}':")
-                for path in downloaded_files:
-                    print(f"  - {path.name}")
-        
-        return 0
-    except Exception as e:
-        print(f"Error during sync: {e}")
-        logger.exception("Sync failed")
         return 1
 
 
@@ -199,100 +130,6 @@ async def _async_query(config: Config, question: str) -> int:
         return 1
 
 
-def cmd_summarize(args: argparse.Namespace) -> int:
-    """Handle the summarize command."""
-    config = Config.from_env()
-    
-    if not config.gemini.api_key:
-        print("Error: Gemini API key not configured.")
-        print("Please set GEMINI_API_KEY environment variable.")
-        return 1
-    
-    return asyncio.run(_async_summarize(config, args.focus))
-
-
-async def _async_summarize(config: Config, focus: Optional[str]) -> int:
-    """Run the summarization asynchronously."""
-    agent = RAGAgent(config, auto_sync=True, save_responses=True)
-    
-    try:
-        # Run the summary (auto-syncs and adds documents automatically)
-        print("Syncing references and preparing documents...")
-        result = await agent.summarize(focus)
-        
-        # Print with citations at the top
-        print("\n" + "=" * 60)
-        print("CITATIONS:")
-        print("-" * 60)
-        citations = result.get_citations()
-        if citations:
-            for i, citation in enumerate(citations, 1):
-                print(f"  [{i}] {citation}")
-        else:
-            print("  No citations available")
-        
-        print("\n" + "=" * 60)
-        print("Summary:")
-        print("-" * 60)
-        print(result.answer)
-        print("\n" + "=" * 60)
-        print(f"Model: {result.model}")
-        print(f"Response saved to: {config.responses_dir}/")
-        
-        return 0
-    except Exception as e:
-        print(f"Error during summarization: {e}")
-        logger.exception("Summarization failed")
-        return 1
-
-
-def cmd_contradictions(args: argparse.Namespace) -> int:
-    """Handle the contradictions command."""
-    config = Config.from_env()
-    
-    if not config.gemini.api_key:
-        print("Error: Gemini API key not configured.")
-        print("Please set GEMINI_API_KEY environment variable.")
-        return 1
-    
-    return asyncio.run(_async_contradictions(config))
-
-
-async def _async_contradictions(config: Config) -> int:
-    """Find contradictions asynchronously."""
-    agent = RAGAgent(config, auto_sync=True, save_responses=True)
-    
-    try:
-        # Find contradictions (auto-syncs and adds documents automatically)
-        print("Syncing references and preparing documents...")
-        result = await agent.find_contradictions()
-        
-        # Print with citations at the top
-        print("\n" + "=" * 60)
-        print("CITATIONS:")
-        print("-" * 60)
-        citations = result.get_citations()
-        if citations:
-            for i, citation in enumerate(citations, 1):
-                print(f"  [{i}] {citation}")
-        else:
-            print("  No citations available")
-        
-        print("\n" + "=" * 60)
-        print("Contradictions Analysis:")
-        print("-" * 60)
-        print(result.answer)
-        print("\n" + "=" * 60)
-        print(f"Model: {result.model}")
-        print(f"Response saved to: {config.responses_dir}/")
-        
-        return 0
-    except Exception as e:
-        print(f"Error during analysis: {e}")
-        logger.exception("Contradiction analysis failed")
-        return 1
-
-
 def create_parser() -> argparse.ArgumentParser:
     """Create the argument parser."""
     parser = argparse.ArgumentParser(
@@ -312,10 +149,7 @@ def create_parser() -> argparse.ArgumentParser:
     )
     
     setup_auth_parser(subparsers)
-    setup_sync_parser(subparsers)
     setup_query_parser(subparsers)
-    setup_summarize_parser(subparsers)
-    setup_contradictions_parser(subparsers)
     
     return parser
 

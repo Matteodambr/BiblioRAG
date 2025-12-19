@@ -1,14 +1,12 @@
 # BiblioRAG
 
-BiblioRAG is a Python wrapper to handle high-accuracy retrieval augmented generation (RAG) from your Mendeley library. This repo is built on top of the Mendeley API and on Paper-QA2, to automatically retrieve your reference lists, and perform RAG actions on them, such as question answering, summarization, and contradiction detection.
+BiblioRAG is a Python wrapper to handle high-accuracy retrieval augmented generation (RAG) from your Mendeley library. This repo is built on top of the Mendeley API and on Paper-QA2, to automatically retrieve your reference lists, and perform RAG actions on them, such as question answering.
 
 ## Features
 
 - **Auto-Sync**: References are automatically synced from Mendeley before each query session
 - **Smart Downloads**: Only download new or changed files to the `references/` folder
 - **RAG-Powered Q&A**: Ask questions about your papers using Paper-QA2
-- **Summarization**: Generate summaries across your document collection
-- **Contradiction Detection**: Find conflicting findings across papers
 - **Gemini Integration**: Uses Google Gemini Pro for high-quality responses
 - **Response Logging**: All interactions are automatically saved to the `responses/` folder
 - **Proper Citations**: Citations display author names, year, and title (not just filenames)
@@ -114,25 +112,6 @@ Each query will:
 - Automatically sync new/updated references from Mendeley
 - Display citations at the top of the response (with author, year, and title)
 - Save the full interaction to the `responses/` folder
-
-### 3. Generate Summaries
-
-Summarize the key findings across your documents:
-
-```bash
-bibliorag summarize
-
-# With a specific focus
-bibliorag summarize --focus "What are the main contributions in the field of X?"
-```
-
-### 4. Find Contradictions
-
-Identify conflicting findings across your papers:
-
-```bash
-bibliorag contradictions
-```
 
 ## How It Works
 
