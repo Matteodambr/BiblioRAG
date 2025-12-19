@@ -264,19 +264,19 @@ def _test_google_embedding(config: Config) -> bool:
         return False
     
     try:
-        import google.generativeai as genai
+        from google import genai
         
-        genai.configure(api_key=config.gemini.api_key)
+        client = genai.Client(api_key=config.gemini.api_key)
         
         test_text = "This is a test sentence to generate embeddings."
         print(f"  Input text: \"{test_text}\"")
         
-        result = genai.embed_content(
+        result = client.models.embed_content(
             model=config.embedding.model_name,
-            content=test_text,
+            contents=test_text,
         )
         
-        embedding = result.get("embedding", [])
+        embedding = result.embeddings[0].values if result.embeddings else []
         if embedding:
             print(f"  ✓ Embedding generated successfully!")
             print(f"  Embedding dimensions: {len(embedding)}")
@@ -308,12 +308,14 @@ def _test_llm(config: Config) -> bool:
     print(f"  Prompt: \"{test_prompt}\"")
     
     try:
-        import google.generativeai as genai
+        from google import genai
         
-        genai.configure(api_key=config.gemini.api_key)
+        client = genai.Client(api_key=config.gemini.api_key)
         
-        model = genai.GenerativeModel(config.gemini.model_name)
-        response = model.generate_content(test_prompt)
+        response = client.models.generate_content(
+            model=config.gemini.model_name,
+            contents=test_prompt,
+        )
         
         if response and response.text:
             print(f"  ✓ LLM response received!")
