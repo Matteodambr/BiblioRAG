@@ -10,6 +10,7 @@ from typing import Any, Optional
 
 import requests
 from requests_oauthlib import OAuth2Session
+from tqdm import tqdm
 
 from bibliorag.config import Config, MendeleyConfig
 
@@ -260,6 +261,7 @@ class MendeleyClient:
         """Synchronize references from Mendeley.
         
         Downloads new or updated documents and their files.
+        Shows a progress bar for new/updated references.
         
         Returns:
             Tuple of (updated documents, downloaded file paths).
@@ -267,55 +269,72 @@ class MendeleyClient:
         self.config.ensure_directories()
         
         documents = self.get_documents()
+        
+        # First pass: identify documents that need updating
+        docs_to_update = [
+            doc for doc in documents 
+            if self._state.is_new_or_updated(doc)
+        ]
+        
+        if not docs_to_update:
+            logger.info("No new or updated documents found")
+            return [], []
+        
         updated_docs = []
         downloaded_files = []
         
-        for doc in documents:
-            if not self._state.is_new_or_updated(doc):
-                logger.debug("Skipping unchanged document: %s", doc.title)
-                continue
-            
-            logger.info("Processing document: %s", doc.title)
-            updated_docs.append(doc)
-            
-            # Get and download files for this document
-            files = self.get_document_files(doc.id)
-            doc_files = []
-            
-            for file_info in files:
-                file_id = file_info.get("id")
-                filename = file_info.get("file_name", f"{file_id}.pdf")
+        # Process documents with progress bar
+        with tqdm(
+            docs_to_update,
+            desc="Syncing references",
+            unit="doc",
+        ) as pbar:
+            for doc in pbar:
+                # Update progress bar description with current document
+                short_title = doc.title[:30] + "..." if len(doc.title) > 30 else doc.title
+                pbar.set_postfix_str(short_title)
                 
-                # Sanitize filename while preserving extension
-                name_parts = filename.rsplit(".", 1)
-                base_name = name_parts[0]
-                extension = name_parts[1] if len(name_parts) > 1 else "pdf"
+                logger.debug("Processing document: %s", doc.title)
+                updated_docs.append(doc)
                 
-                # Sanitize the base name
-                safe_base = "".join(
-                    c for c in base_name if c.isalnum() or c in "-_ "
-                ).strip()
-                if not safe_base:
-                    safe_base = file_id
+                # Get and download files for this document
+                files = self.get_document_files(doc.id)
+                doc_files = []
                 
-                # Sanitize the extension (alphanumeric only)
-                safe_ext = "".join(c for c in extension if c.isalnum())
-                if not safe_ext:
-                    safe_ext = "pdf"
+                for file_info in files:
+                    file_id = file_info.get("id")
+                    filename = file_info.get("file_name", f"{file_id}.pdf")
+                    
+                    # Sanitize filename while preserving extension
+                    name_parts = filename.rsplit(".", 1)
+                    base_name = name_parts[0]
+                    extension = name_parts[1] if len(name_parts) > 1 else "pdf"
+                    
+                    # Sanitize the base name
+                    safe_base = "".join(
+                        c for c in base_name if c.isalnum() or c in "-_ "
+                    ).strip()
+                    if not safe_base:
+                        safe_base = file_id
+                    
+                    # Sanitize the extension (alphanumeric only)
+                    safe_ext = "".join(c for c in extension if c.isalnum())
+                    if not safe_ext:
+                        safe_ext = "pdf"
+                    
+                    safe_filename = f"{safe_base}.{safe_ext}"
+                    
+                    output_path = self.config.references_dir / safe_filename
+                    
+                    try:
+                        self.download_file(file_id, output_path)
+                        downloaded_files.append(output_path)
+                        doc_files.append(str(output_path))
+                    except requests.RequestException as e:
+                        logger.error("Failed to download file %s: %s", filename, e)
                 
-                safe_filename = f"{safe_base}.{safe_ext}"
-                
-                output_path = self.config.references_dir / safe_filename
-                
-                try:
-                    self.download_file(file_id, output_path)
-                    downloaded_files.append(output_path)
-                    doc_files.append(str(output_path))
-                except requests.RequestException as e:
-                    logger.error("Failed to download file %s: %s", filename, e)
-            
-            # Update sync state
-            self._state.update_document(doc, doc_files)
+                # Update sync state
+                self._state.update_document(doc, doc_files)
         
         # Save state
         self._state.last_sync = datetime.utcnow().isoformat()
