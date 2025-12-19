@@ -8,6 +8,7 @@ BiblioRAG is a Python wrapper to handle high-accuracy retrieval augmented genera
 - **Smart Downloads**: Only download new or changed files to the `references/` folder
 - **RAG-Powered Q&A**: Ask questions about your papers using Paper-QA2
 - **Gemini Integration**: Uses Google Gemini Pro for high-quality responses
+- **Local Embeddings**: Uses Ollama with nomic-embed-text for local embeddings (no OpenAI API needed)
 - **Response Logging**: All interactions are automatically saved to the `responses/` folder
 - **Proper Citations**: Citations display author names, year, and title (not just filenames)
 
@@ -15,7 +16,17 @@ BiblioRAG is a Python wrapper to handle high-accuracy retrieval augmented genera
 
 ### Prerequisites
 
-Install [Miniconda](https://docs.conda.io/en/latest/miniconda.html) or [Anaconda](https://www.anaconda.com/download) if you don't have conda installed.
+1. Install [Miniconda](https://docs.conda.io/en/latest/miniconda.html) or [Anaconda](https://www.anaconda.com/download) if you don't have conda installed.
+
+2. Install [Ollama](https://ollama.ai/) for local embeddings:
+   - **Linux**: `curl -fsSL https://ollama.ai/install.sh | sh`
+   - **macOS**: Download from [ollama.ai](https://ollama.ai/)
+   - **Windows**: Download from [ollama.ai](https://ollama.ai/)
+
+3. Pull the nomic embedding model:
+   ```bash
+   ollama pull nomic-embed-text
+   ```
 
 ### Quick Setup (Recommended)
 
@@ -88,6 +99,11 @@ conda activate bibliorag
    - Create an API key
    - Add it to your `.env` file as `GEMINI_API_KEY`
 
+4. Ensure Ollama is running:
+   ```bash
+   ollama serve
+   ```
+
 ## Usage
 
 ### 1. Authenticate with Mendeley
@@ -119,7 +135,8 @@ Each query will:
 
 BiblioRAG uses Paper-QA2 for document indexing and retrieval:
 
-- **Embedding**: Documents are embedded using the configured embedding model (default: Google's `models/embedding-001`)
+- **Local Embeddings**: By default, uses Ollama with `nomic-embed-text` for embeddings (no API key required)
+- **Alternative**: Can also use Google embeddings by setting `EMBEDDING_PROVIDER=google` in `.env`
 - **Incremental Processing**: Only new or updated documents are processed - existing embeddings are cached by Paper-QA2
 - **Index Storage**: Paper-QA2 maintains its own internal index for efficient retrieval
 
@@ -195,7 +212,9 @@ Timestamp: 2024-01-15T10:30:00
 | `MENDELEY_ACCESS_TOKEN` | OAuth2 access token (obtained via `auth` command) |
 | `MENDELEY_REFRESH_TOKEN` | OAuth2 refresh token (obtained via `auth` command) |
 | `GEMINI_API_KEY` | Your Google Gemini API key |
-| `EMBEDDING_MODEL` | (Optional) Embedding model to use (default: `models/embedding-001`) |
+| `EMBEDDING_PROVIDER` | Embedding provider: `ollama` (default) or `google` |
+| `EMBEDDING_MODEL` | Embedding model: `nomic-embed-text` (default for Ollama) or `models/embedding-001` (for Google) |
+| `OLLAMA_URL` | Ollama server URL (default: `http://localhost:11434`) |
 
 ## Project Structure
 

@@ -35,14 +35,37 @@ class GeminiConfig:
     
     api_key: str = ""
     model_name: str = "gemini-1.5-pro"
-    embedding_model: str = "models/embedding-001"
     
     def __post_init__(self) -> None:
         """Load from environment if not set."""
         if not self.api_key:
             self.api_key = os.getenv("GEMINI_API_KEY", "")
-        if not self.embedding_model:
-            self.embedding_model = os.getenv("EMBEDDING_MODEL", "models/embedding-001")
+
+
+@dataclass
+class EmbeddingConfig:
+    """Configuration for embedding model."""
+    
+    # Provider: "ollama" for local, "google" for Google embeddings
+    provider: str = "ollama"
+    # Model name: "nomic-embed-text" for Ollama, "models/embedding-001" for Google
+    model_name: str = "nomic-embed-text"
+    # Ollama server URL (only used when provider is "ollama")
+    ollama_url: str = "http://localhost:11434"
+    
+    def __post_init__(self) -> None:
+        """Load from environment if not set."""
+        env_provider = os.getenv("EMBEDDING_PROVIDER", "").lower()
+        if env_provider:
+            self.provider = env_provider
+        
+        env_model = os.getenv("EMBEDDING_MODEL", "")
+        if env_model:
+            self.model_name = env_model
+        
+        env_ollama_url = os.getenv("OLLAMA_URL", "")
+        if env_ollama_url:
+            self.ollama_url = env_ollama_url
 
 
 @dataclass
@@ -52,6 +75,7 @@ class Config:
     # Sub-configurations
     mendeley: MendeleyConfig = field(default_factory=MendeleyConfig)
     gemini: GeminiConfig = field(default_factory=GeminiConfig)
+    embedding: EmbeddingConfig = field(default_factory=EmbeddingConfig)
     
     # Paths
     references_dir: Path = field(default_factory=lambda: Path("references"))
@@ -67,6 +91,8 @@ class Config:
             self.mendeley = MendeleyConfig()
         if not self.gemini.api_key:
             self.gemini = GeminiConfig()
+        # Always re-initialize embedding config to pick up env vars
+        self.embedding = EmbeddingConfig()
         
         # Ensure paths are Path objects
         if isinstance(self.references_dir, str):

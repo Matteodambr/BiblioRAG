@@ -260,7 +260,7 @@ class RAGAgent:
         return filepath
     
     def _get_settings(self) -> Any:
-        """Get Paper-QA2 settings configured for Gemini."""
+        """Get Paper-QA2 settings configured for Gemini and embedding model."""
         if self._settings is not None:
             return self._settings
         
@@ -275,10 +275,22 @@ class RAGAgent:
         # Configure Gemini model via litellm
         model_name = f"gemini/{self.config.gemini.model_name}"
         
+        # Configure embedding based on provider
+        embedding_config = self.config.embedding
+        if embedding_config.provider == "ollama":
+            # Use Ollama with nomic-embed-text or other local model
+            embedding = f"ollama/{embedding_config.model_name}"
+        elif embedding_config.provider == "google":
+            # Use Google embedding model
+            embedding = embedding_config.model_name
+        else:
+            # Default to Ollama
+            embedding = f"ollama/{embedding_config.model_name}"
+        
         self._settings = Settings(
             llm=model_name,
             summary_llm=model_name,
-            embedding=self.config.gemini.embedding_model,
+            embedding=embedding,
         )
         
         return self._settings
