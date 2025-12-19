@@ -7,7 +7,6 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
-from urllib.parse import urlencode
 
 import requests
 from requests_oauthlib import OAuth2Session
@@ -166,8 +165,9 @@ class MendeleyClient:
         Returns:
             Token dictionary with access_token and refresh_token.
         """
-        # Allow insecure transport for localhost during development
-        os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"
+        # Allow insecure transport only for localhost during development
+        if "localhost" in self.mendeley_config.redirect_uri or "127.0.0.1" in self.mendeley_config.redirect_uri:
+            os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"
         
         token = self.session.fetch_token(
             MENDELEY_TOKEN_URL,
@@ -284,12 +284,24 @@ class MendeleyClient:
                 file_id = file_info.get("id")
                 filename = file_info.get("file_name", f"{file_id}.pdf")
                 
-                # Sanitize filename
-                safe_filename = "".join(
-                    c for c in filename if c.isalnum() or c in ".-_ "
+                # Sanitize filename while preserving extension
+                name_parts = filename.rsplit(".", 1)
+                base_name = name_parts[0]
+                extension = name_parts[1] if len(name_parts) > 1 else "pdf"
+                
+                # Sanitize the base name
+                safe_base = "".join(
+                    c for c in base_name if c.isalnum() or c in "-_ "
                 ).strip()
-                if not safe_filename:
-                    safe_filename = f"{file_id}.pdf"
+                if not safe_base:
+                    safe_base = file_id
+                
+                # Sanitize the extension (alphanumeric only)
+                safe_ext = "".join(c for c in extension if c.isalnum())
+                if not safe_ext:
+                    safe_ext = "pdf"
+                
+                safe_filename = f"{safe_base}.{safe_ext}"
                 
                 output_path = self.config.references_dir / safe_filename
                 

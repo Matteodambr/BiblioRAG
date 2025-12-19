@@ -3,7 +3,7 @@ import argparse
 import asyncio
 import logging
 import sys
-from pathlib import Path
+from typing import Any, Optional
 
 from bibliorag.config import Config
 from bibliorag.mendeley_client import MendeleyClient
@@ -17,7 +17,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def setup_auth_parser(subparsers: argparse._SubParsersAction) -> None:
+def setup_auth_parser(subparsers: Any) -> None:
     """Set up the auth subcommand."""
     auth_parser = subparsers.add_parser(
         "auth",
@@ -27,7 +27,7 @@ def setup_auth_parser(subparsers: argparse._SubParsersAction) -> None:
     auth_parser.set_defaults(func=cmd_auth)
 
 
-def setup_sync_parser(subparsers: argparse._SubParsersAction) -> None:
+def setup_sync_parser(subparsers: Any) -> None:
     """Set up the sync subcommand."""
     sync_parser = subparsers.add_parser(
         "sync",
@@ -37,7 +37,7 @@ def setup_sync_parser(subparsers: argparse._SubParsersAction) -> None:
     sync_parser.set_defaults(func=cmd_sync)
 
 
-def setup_query_parser(subparsers: argparse._SubParsersAction) -> None:
+def setup_query_parser(subparsers: Any) -> None:
     """Set up the query subcommand."""
     query_parser = subparsers.add_parser(
         "query",
@@ -52,7 +52,7 @@ def setup_query_parser(subparsers: argparse._SubParsersAction) -> None:
     query_parser.set_defaults(func=cmd_query)
 
 
-def setup_summarize_parser(subparsers: argparse._SubParsersAction) -> None:
+def setup_summarize_parser(subparsers: Any) -> None:
     """Set up the summarize subcommand."""
     summarize_parser = subparsers.add_parser(
         "summarize",
@@ -68,7 +68,7 @@ def setup_summarize_parser(subparsers: argparse._SubParsersAction) -> None:
     summarize_parser.set_defaults(func=cmd_summarize)
 
 
-def setup_contradictions_parser(subparsers: argparse._SubParsersAction) -> None:
+def setup_contradictions_parser(subparsers: Any) -> None:
     """Set up the contradictions subcommand."""
     contradictions_parser = subparsers.add_parser(
         "contradictions",
@@ -205,7 +205,7 @@ def cmd_summarize(args: argparse.Namespace) -> int:
     return asyncio.run(_async_summarize(config, args.focus))
 
 
-async def _async_summarize(config: Config, focus: str | None) -> int:
+async def _async_summarize(config: Config, focus: Optional[str]) -> int:
     """Run the summarization asynchronously."""
     agent = RAGAgent(config)
     

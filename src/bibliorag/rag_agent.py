@@ -52,7 +52,6 @@ class RAGAgent:
         
         try:
             from paperqa import Settings
-            from paperqa.llms import LiteLLMModel
         except ImportError as e:
             raise ImportError(
                 "paper-qa is not installed. Please install it with: "
@@ -65,7 +64,7 @@ class RAGAgent:
         self._settings = Settings(
             llm=model_name,
             summary_llm=model_name,
-            embedding="text-embedding-3-small",  # Or use Gemini embeddings
+            embedding=self.config.gemini.embedding_model,
         )
         
         return self._settings

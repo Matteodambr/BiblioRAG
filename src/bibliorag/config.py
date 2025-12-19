@@ -35,11 +35,14 @@ class GeminiConfig:
     
     api_key: str = ""
     model_name: str = "gemini-1.5-pro"
+    embedding_model: str = "models/embedding-001"
     
     def __post_init__(self) -> None:
         """Load from environment if not set."""
         if not self.api_key:
             self.api_key = os.getenv("GEMINI_API_KEY", "")
+        if not self.embedding_model:
+            self.embedding_model = os.getenv("EMBEDDING_MODEL", "models/embedding-001")
 
 
 @dataclass
