@@ -40,6 +40,7 @@ env/
 references/
 responses/
 .bibliorag_state.json
+.bibliorag_cache/
 
 # Testing
 .pytest_cache/

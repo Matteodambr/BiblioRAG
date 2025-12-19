@@ -30,20 +30,49 @@ class MendeleyConfig:
 
 
 @dataclass
-class GeminiConfig:
-    """Configuration for Google Gemini API."""
+class LLMConfig:
+    """Configuration for LLM (Language Model)."""
     
-    api_key: str = ""
+    # Provider: "gemini" for Google Gemini API, "ollama" for local Ollama
+    provider: str = "gemini"
+    # Model name (e.g., "gemini-2.5-flash" for Gemini, "deepseek-r1:8b" for Ollama)
     model_name: str = "gemini-2.5-flash"
+    # API key (only needed for Gemini)
+    api_key: str = ""
+    # Separate model for enrichment during indexing (can be local like ollama/llama3.2:1b)
+    # If empty, uses main model
+    enrichment_model: str = ""
+    # Fallback model when Gemini hits rate limits (e.g., ollama/deepseek-r1:8b)
+    # Only used when provider is "gemini". If empty, no fallback is used
+    fallback_model: str = ""
     
     def __post_init__(self) -> None:
         """Load from environment if not set."""
-        if not self.api_key:
-            self.api_key = os.getenv("GEMINI_API_KEY", "")
+        env_provider = os.getenv("LLM_PROVIDER", "").lower()
+        if env_provider:
+            self.provider = env_provider
         
-        env_model = os.getenv("GEMINI_MODEL", "")
-        if env_model:
-            self.model_name = env_model
+        # Load model name based on provider
+        if self.provider == "gemini":
+            if not self.api_key:
+                self.api_key = os.getenv("GEMINI_API_KEY", "")
+            env_model = os.getenv("GEMINI_MODEL", "")
+            if env_model:
+                self.model_name = env_model
+            # Only use fallback for Gemini
+            env_fallback = os.getenv("FALLBACK_MODEL", "")
+            if env_fallback:
+                self.fallback_model = env_fallback
+        elif self.provider == "ollama":
+            env_model = os.getenv("OLLAMA_LLM_MODEL", "")
+            if env_model:
+                self.model_name = env_model
+            # No fallback for Ollama - just error if it fails
+            self.fallback_model = ""
+        
+        env_enrichment = os.getenv("ENRICHMENT_MODEL", "")
+        if env_enrichment:
+            self.enrichment_model = env_enrichment
 
 
 @dataclass
@@ -73,17 +102,55 @@ class EmbeddingConfig:
 
 
 @dataclass
+class PaperQAConfig:
+    """Configuration for Paper-QA settings."""
+    
+    # Answer quality settings
+    answer_max_sources: int = 5  # Maximum number of citations in answer
+    evidence_k: int = 10  # Number of evidence chunks to retrieve
+    answer_length: str = "about 200 words, but can be longer"
+    evidence_summary_length: str = "about 100 words"
+    
+    # Performance settings
+    temperature: float = 0.0  # LLM temperature (0.0 = deterministic)
+    max_concurrent_requests: int = 4  # Parallel requests to LLM
+    search_count: int = 8  # Number of papers to search
+    
+    def __post_init__(self) -> None:
+        """Load from environment if not set."""
+        # Answer quality settings
+        if env_val := os.getenv("PAPERQA_ANSWER_MAX_SOURCES"):
+            self.answer_max_sources = int(env_val)
+        if env_val := os.getenv("PAPERQA_EVIDENCE_K"):
+            self.evidence_k = int(env_val)
+        if env_val := os.getenv("PAPERQA_ANSWER_LENGTH"):
+            self.answer_length = env_val
+        if env_val := os.getenv("PAPERQA_EVIDENCE_SUMMARY_LENGTH"):
+            self.evidence_summary_length = env_val
+        
+        # Performance settings
+        if env_val := os.getenv("PAPERQA_TEMPERATURE"):
+            self.temperature = float(env_val)
+        if env_val := os.getenv("PAPERQA_MAX_CONCURRENT_REQUESTS"):
+            self.max_concurrent_requests = int(env_val)
+        if env_val := os.getenv("PAPERQA_SEARCH_COUNT"):
+            self.search_count = int(env_val)
+
+
+@dataclass
 class Config:
     """Main configuration for BiblioRAG."""
     
     # Sub-configurations
     mendeley: MendeleyConfig = field(default_factory=MendeleyConfig)
-    gemini: GeminiConfig = field(default_factory=GeminiConfig)
+    llm: LLMConfig = field(default_factory=LLMConfig)
     embedding: EmbeddingConfig = field(default_factory=EmbeddingConfig)
+    paperqa: PaperQAConfig = field(default_factory=PaperQAConfig)
     
     # Paths
     references_dir: Path = field(default_factory=lambda: Path("references"))
     responses_dir: Path = field(default_factory=lambda: Path("responses"))
+    cache_dir: Path = field(default_factory=lambda: Path(".bibliorag_cache"))
     state_file: Path = field(default_factory=lambda: Path(".bibliorag_state.json"))
     
     def __post_init__(self) -> None:
@@ -93,16 +160,20 @@ class Config:
         # Re-initialize sub-configs to pick up env vars
         if not self.mendeley.client_id:
             self.mendeley = MendeleyConfig()
-        if not self.gemini.api_key:
-            self.gemini = GeminiConfig()
+        if not self.llm.api_key and self.llm.provider == "gemini":
+            self.llm = LLMConfig()
         # Always re-initialize embedding config to pick up env vars
         self.embedding = EmbeddingConfig()
+        # Always re-initialize paperqa config to pick up env vars
+        self.paperqa = PaperQAConfig()
         
         # Ensure paths are Path objects
         if isinstance(self.references_dir, str):
             self.references_dir = Path(self.references_dir)
         if isinstance(self.responses_dir, str):
             self.responses_dir = Path(self.responses_dir)
+        if isinstance(self.cache_dir, str):
+            self.cache_dir = Path(self.cache_dir)
         if isinstance(self.state_file, str):
             self.state_file = Path(self.state_file)
     
@@ -110,6 +181,7 @@ class Config:
         """Create necessary directories."""
         self.references_dir.mkdir(parents=True, exist_ok=True)
         self.responses_dir.mkdir(parents=True, exist_ok=True)
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
     
     @classmethod
     def from_env(cls) -> "Config":

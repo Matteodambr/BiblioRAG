@@ -65,12 +65,16 @@ class SyncState:
     
     documents: dict[str, dict[str, Any]] = field(default_factory=dict)
     last_sync: Optional[str] = None
+    access_token: Optional[str] = None
+    refresh_token: Optional[str] = None
     
     def save(self, path: Path) -> None:
         """Save state to file."""
         data = {
             "documents": self.documents,
             "last_sync": self.last_sync,
+            "access_token": self.access_token,
+            "refresh_token": self.refresh_token,
         }
         with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
@@ -87,6 +91,8 @@ class SyncState:
             return cls(
                 documents=data.get("documents", {}),
                 last_sync=data.get("last_sync"),
+                access_token=data.get("access_token"),
+                refresh_token=data.get("refresh_token"),
             )
         except (json.JSONDecodeError, IOError) as e:
             logger.warning("Failed to load sync state: %s", e)
@@ -126,6 +132,106 @@ class MendeleyClient:
         self.mendeley_config = self.config.mendeley
         self._session: Optional[OAuth2Session] = None
         self._state = SyncState.load(self.config.state_file)
+        
+        # Load tokens from state file (preferred) or from .env (fallback for first auth)
+        if self._state.access_token:
+            self.mendeley_config.access_token = self._state.access_token
+            self.mendeley_config.refresh_token = self._state.refresh_token
+    
+    def is_authenticated(self) -> bool:
+        """Check if the client has valid authentication.
+        
+        Returns:
+            True if authenticated (has tokens), False otherwise.
+        """
+        return bool(self.mendeley_config.access_token and self.mendeley_config.refresh_token)
+    
+    def check_connection(self) -> bool:
+        """Check if the Mendeley API is reachable and authentication is valid.
+        
+        Returns:
+            True if connection is valid, False otherwise.
+        """
+        if not self.is_authenticated():
+            return False
+        
+        try:
+            # Try a simple API call to verify connection
+            url = f"{MENDELEY_API_BASE}/profiles/me"
+            response = self.session.get(url, timeout=5)
+            
+            if response.status_code == 401:
+                # Token expired, try to refresh
+                try:
+                    self._refresh_token()
+                    response = self.session.get(url, timeout=5)
+                    return response.status_code == 200
+                except Exception:
+                    return False
+            
+            return response.status_code == 200
+        except Exception as e:
+            logger.debug("Connection check failed: %s", e)
+            return False
+    
+    def ensure_authenticated(self) -> None:
+        """Ensure the client is authenticated, prompt user if not.
+        
+        Raises:
+            RuntimeError: If authentication fails or user declines.
+        """
+        if not self.is_authenticated():
+            raise RuntimeError(
+                "Not authenticated with Mendeley.\n"
+                "Please run: bibliorag auth"
+            )
+        
+        # Check if connection is valid
+        if not self.check_connection():
+            raise RuntimeError(
+                "Mendeley authentication invalid or expired.\n"
+                "Please run: bibliorag auth"
+            )
+    
+    def _save_tokens(self, access_token: str, refresh_token: str) -> None:
+        """Save tokens to state file."""
+        self._state.access_token = access_token
+        self._state.refresh_token = refresh_token
+        self._state.save(self.config.state_file)
+        logger.info("Tokens saved to state file")
+    
+    def _refresh_token(self) -> None:
+        """Refresh the access token using the refresh token."""
+        if not self.mendeley_config.refresh_token:
+            raise ValueError("No refresh token available")
+        
+        logger.info("Refreshing access token...")
+        
+        # Allow insecure transport for localhost
+        if "localhost" in self.mendeley_config.redirect_uri or "127.0.0.1" in self.mendeley_config.redirect_uri:
+            os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"
+        
+        token_data = {
+            "grant_type": "refresh_token",
+            "refresh_token": self.mendeley_config.refresh_token,
+            "client_id": self.mendeley_config.client_id,
+            "client_secret": self.mendeley_config.client_secret,
+        }
+        
+        response = requests.post(MENDELEY_TOKEN_URL, data=token_data)
+        response.raise_for_status()
+        
+        token = response.json()
+        self.mendeley_config.access_token = token.get("access_token")
+        self.mendeley_config.refresh_token = token.get("refresh_token", self.mendeley_config.refresh_token)
+        
+        # Save to state file
+        self._save_tokens(self.mendeley_config.access_token, self.mendeley_config.refresh_token)
+        
+        # Reset session to use new token
+        self._session = None
+        
+        logger.info("Access token refreshed successfully")
     
     @property
     def session(self) -> OAuth2Session:
@@ -181,6 +287,9 @@ class MendeleyClient:
         self.mendeley_config.access_token = token.get("access_token")
         self.mendeley_config.refresh_token = token.get("refresh_token")
         
+        # Save tokens to state file
+        self._save_tokens(self.mendeley_config.access_token, self.mendeley_config.refresh_token)
+        
         return token
     
     def get_documents(self, limit: int = 500) -> list[Document]:
@@ -197,8 +306,19 @@ class MendeleyClient:
         params = {"limit": min(limit, 500), "view": "all"}
         
         while url and len(documents) < limit:
-            response = self.session.get(url, params=params)
-            response.raise_for_status()
+            try:
+                response = self.session.get(url, params=params)
+                response.raise_for_status()
+            except requests.exceptions.HTTPError as e:
+                # If 401 Unauthorized, try refreshing the token
+                if e.response.status_code == 401:
+                    logger.info("Access token expired, refreshing...")
+                    self._refresh_token()
+                    # Retry the request with new token
+                    response = self.session.get(url, params=params)
+                    response.raise_for_status()
+                else:
+                    raise
             
             data = response.json()
             for item in data:
@@ -226,8 +346,17 @@ class MendeleyClient:
         url = f"{MENDELEY_API_BASE}/files"
         params = {"document_id": document_id}
         
-        response = self.session.get(url, params=params)
-        response.raise_for_status()
+        try:
+            response = self.session.get(url, params=params)
+            response.raise_for_status()
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 401:
+                logger.info("Access token expired, refreshing...")
+                self._refresh_token()
+                response = self.session.get(url, params=params)
+                response.raise_for_status()
+            else:
+                raise
         
         return response.json()
     
@@ -245,8 +374,18 @@ class MendeleyClient:
         
         # Request the actual file content
         headers = {"Accept": "application/pdf"}
-        response = self.session.get(url, headers=headers, stream=True)
-        response.raise_for_status()
+        
+        try:
+            response = self.session.get(url, headers=headers, stream=True)
+            response.raise_for_status()
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 401:
+                logger.info("Access token expired, refreshing...")
+                self._refresh_token()
+                response = self.session.get(url, headers=headers, stream=True)
+                response.raise_for_status()
+            else:
+                raise
         
         output_path.parent.mkdir(parents=True, exist_ok=True)
         
