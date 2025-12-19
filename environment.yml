@@ -12,6 +12,7 @@ dependencies:
     # Paper-QA2 for RAG
     - paper-qa>=5.0.0
     - pypdfium2>=4.0.0  # For PDF media parsing (images, tables)
+    - pypdf>=4.0.0  # For PDF outline extraction and chunking
     # Google Gemini
     - google-genai>=1.0.0
     - litellm>=1.0.0

@@ -116,6 +116,14 @@ class PaperQAConfig:
     max_concurrent_requests: int = 4  # Parallel requests to LLM
     search_count: int = 8  # Number of papers to search
     
+    # Document chunking settings
+    split_large_pdfs: bool = True  # Split large PDFs into chapters
+    large_pdf_pages: int = 100  # PDFs with more pages are considered "large"
+    chunk_size_pages: int = 50  # Fallback chunk size if no outline found
+    
+    # Indexing settings
+    use_enrichment: bool = False  # Use LLM to enrich images/tables during indexing (slower but higher quality)
+    
     def __post_init__(self) -> None:
         """Load from environment if not set."""
         # Answer quality settings
@@ -135,7 +143,18 @@ class PaperQAConfig:
             self.max_concurrent_requests = int(env_val)
         if env_val := os.getenv("PAPERQA_SEARCH_COUNT"):
             self.search_count = int(env_val)
-
+        
+        # Document chunking settings
+        if env_val := os.getenv("PAPERQA_SPLIT_LARGE_PDFS"):
+            self.split_large_pdfs = env_val.lower() in ("true", "1", "yes")
+        if env_val := os.getenv("PAPERQA_LARGE_PDF_PAGES"):
+            self.large_pdf_pages = int(env_val)
+        if env_val := os.getenv("PAPERQA_CHUNK_SIZE_PAGES"):
+            self.chunk_size_pages = int(env_val)
+        
+        # Indexing settings
+        if env_val := os.getenv("PAPERQA_USE_ENRICHMENT"):
+            self.use_enrichment = env_val.lower() in ("true", "1", "yes")
 
 @dataclass
 class Config:

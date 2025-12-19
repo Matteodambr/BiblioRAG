@@ -13,6 +13,168 @@ from bibliorag.config import Config
 
 logger = logging.getLogger(__name__)
 
+# Suppress noisy pypdf warnings
+logging.getLogger('pypdf._reader').setLevel(logging.ERROR)
+
+
+def _get_pdf_outline(pdf_path: Path) -> list[dict]:
+    """Extract outline/bookmarks from a PDF.
+    
+    Args:
+        pdf_path: Path to the PDF file.
+        
+    Returns:
+        List of outline entries with 'title' and 'page' keys.
+    """
+    try:
+        from pypdf import PdfReader
+        
+        reader = PdfReader(pdf_path)
+        outline = reader.outline
+        
+        if not outline:
+            return []
+        
+        entries = []
+        
+        def extract_entries(items, level=0):
+            """Recursively extract outline entries."""
+            for item in items:
+                if isinstance(item, list):
+                    extract_entries(item, level + 1)
+                else:
+                    try:
+                        # Get destination page
+                        page_num = reader.get_destination_page_number(item) + 1  # 1-indexed
+                        entries.append({
+                            'title': item.title if hasattr(item, 'title') else str(item),
+                            'page': page_num,
+                            'level': level
+                        })
+                    except Exception:
+                        continue
+        
+        extract_entries(outline)
+        return entries
+        
+    except Exception as e:
+        logger.warning(f"Could not extract outline from {pdf_path.name}: {e}")
+        return []
+
+
+def _get_pdf_page_count(pdf_path: Path) -> int:
+    """Get number of pages in a PDF.
+    
+    Args:
+        pdf_path: Path to the PDF file.
+        
+    Returns:
+        Number of pages, or 0 if error.
+    """
+    try:
+        from pypdf import PdfReader
+        reader = PdfReader(pdf_path)
+        return len(reader.pages)
+    except Exception as e:
+        logger.warning(f"Could not get page count for {pdf_path.name}: {e}")
+        return 0
+
+
+def _split_pdf_into_chunks(pdf_path: Path, chunk_size_pages: int = 50) -> list[dict]:
+    """Split a PDF into page-range chunks.
+    
+    Args:
+        pdf_path: Path to the PDF file.
+        chunk_size_pages: Number of pages per chunk.
+        
+    Returns:
+        List of dicts with 'title', 'start_page', 'end_page' keys.
+    """
+    page_count = _get_pdf_page_count(pdf_path)
+    if page_count == 0:
+        return []
+    
+    chunks = []
+    for i in range(0, page_count, chunk_size_pages):
+        start = i + 1  # 1-indexed
+        end = min(i + chunk_size_pages, page_count)
+        chunks.append({
+            'title': f"Pages {start}-{end}",
+            'start_page': start,
+            'end_page': end
+        })
+    
+    return chunks
+
+
+def _get_pdf_chapters(pdf_path: Path, chunk_size_pages: int = 50) -> list[dict]:
+    """Get chapter divisions from PDF outline or fall back to fixed chunks.
+    
+    Args:
+        pdf_path: Path to the PDF file.
+        chunk_size_pages: Fallback chunk size if no outline.
+        
+    Returns:
+        List of dicts with 'title', 'start_page', 'end_page' keys.
+    """
+    outline = _get_pdf_outline(pdf_path)
+    
+    if not outline:
+        logger.info(f"{pdf_path.name}: No outline found, using {chunk_size_pages}-page chunks")
+        return _split_pdf_into_chunks(pdf_path, chunk_size_pages)
+    
+    page_count = _get_pdf_page_count(pdf_path)
+    
+    # Use top-level outline entries as chapters
+    top_level = [e for e in outline if e['level'] == 0]
+    
+    if not top_level:
+        logger.info(f"{pdf_path.name}: No top-level outline, using all entries")
+        top_level = outline
+    
+    # Build chapters from outline
+    chapters = []
+    for i, entry in enumerate(top_level):
+        start_page = entry['page']
+        # End page is start of next chapter, or end of PDF
+        end_page = top_level[i + 1]['page'] - 1 if i + 1 < len(top_level) else page_count
+        
+        chapters.append({
+            'title': entry['title'],
+            'start_page': start_page,
+            'end_page': end_page
+        })
+    
+    # If we have too many tiny chunks (>50 chunks for a book), merge them
+    # This happens when outline includes every subsection
+    if len(chapters) > 50:
+        logger.info(f"{pdf_path.name}: {len(chapters)} outline entries too granular, using {chunk_size_pages}-page chunks instead")
+        return _split_pdf_into_chunks(pdf_path, chunk_size_pages)
+    
+    # Filter out very small chunks (< 3 pages) by merging with next
+    filtered_chapters = []
+    i = 0
+    while i < len(chapters):
+        chapter = chapters[i]
+        chunk_size = chapter['end_page'] - chapter['start_page'] + 1
+        
+        # If chunk is too small and not the last one, try to merge with next
+        if chunk_size < 3 and i < len(chapters) - 1:
+            next_chapter = chapters[i + 1]
+            merged = {
+                'title': chapter['title'],  # Keep first title
+                'start_page': chapter['start_page'],
+                'end_page': next_chapter['end_page']
+            }
+            filtered_chapters.append(merged)
+            i += 2  # Skip next chapter since we merged it
+        else:
+            filtered_chapters.append(chapter)
+            i += 1
+    
+    logger.info(f"{pdf_path.name}: Found {len(filtered_chapters)} chapters from outline")
+    return filtered_chapters
+
 
 def _compute_documents_fingerprint(references_dir: Path) -> str:
     """Compute a fingerprint hash of all PDFs in the references directory.
@@ -467,30 +629,41 @@ class RAGAgent:
         # Configure parsing enrichment LLM - can use different model for indexing
         # This allows using fast local models (e.g., ollama/llama3.2:1b) during indexing
         # while keeping powerful models (Gemini) for query answering
-        enrichment_model = self.config.llm.enrichment_model or model_name
         
-        # If enrichment model is different from main model, create separate config
-        if enrichment_model != model_name:
-            enrichment_llm_config = {
-                "model_list": [
-                    {
-                        "model_name": enrichment_model,
-                        "litellm_params": {
-                            "model": enrichment_model,
-                            "num_retries": 3,
-                            "timeout": 60,
-                        }
-                    }
-                ],
-                "num_retries": 3,
-                "retry_after": 5,
-            }
-            logger.info(f"Using separate enrichment LLM for indexing: {enrichment_model}")
+        # Check if enrichment is enabled
+        if not self.config.paperqa.use_enrichment:
+            # Disable multimodal parsing (no LLM enrichment of images/tables)
+            # Use string value instead of enum to avoid import issues
+            self._settings.parsing.multimodal = False
+            logger.info("LLM enrichment disabled - text-only indexing for faster processing")
         else:
-            enrichment_llm_config = llm_config
-        
-        self._settings.parsing.enrichment_llm = enrichment_model
-        self._settings.parsing.enrichment_llm_config = enrichment_llm_config
+            enrichment_model = self.config.llm.enrichment_model or model_name
+            
+            # If enrichment model is different from main model, create separate config
+            if enrichment_model != model_name:
+                enrichment_llm_config = {
+                    "model_list": [
+                        {
+                            "model_name": enrichment_model,
+                            "litellm_params": {
+                                "model": enrichment_model,
+                                "num_retries": 3,
+                                "timeout": 60,
+                                "api_base": os.environ.get("OLLAMA_API_BASE", "http://localhost:11434"),
+                            }
+                        }
+                    ],
+                    "num_retries": 3,
+                    "retry_after": 5,
+                }
+                logger.info(f"Using separate enrichment LLM for indexing: {enrichment_model}")
+                # When using enrichment_llm_config, set enrichment_llm to model name from config
+                self._settings.parsing.enrichment_llm = enrichment_model
+                self._settings.parsing.enrichment_llm_config = enrichment_llm_config
+            else:
+                # Use same LLM for enrichment as main model
+                self._settings.parsing.enrichment_llm = model_name
+                self._settings.parsing.enrichment_llm_config = llm_config
         
         # Configure answer quality settings
         self._settings.answer.answer_max_sources = self.config.paperqa.answer_max_sources
@@ -552,30 +725,69 @@ class RAGAgent:
         settings = self._get_settings()
         added = 0
         
-        print(f"Adding {len(paths)} documents to index...")
+        # Check for large PDFs and split if needed
+        docs_to_add = []
+        if self.config.paperqa.split_large_pdfs:
+            print("Analyzing documents for chunking...", flush=True)
+            for path in paths:
+                if not path.exists() or path.suffix.lower() != '.pdf':
+                    docs_to_add.append({'path': path, 'chunk': None})
+                    continue
+                
+                page_count = _get_pdf_page_count(path)
+                if page_count >= self.config.paperqa.large_pdf_pages:
+                    chapters = _get_pdf_chapters(path, self.config.paperqa.chunk_size_pages)
+                    for chapter in chapters:
+                        docs_to_add.append({
+                            'path': path,
+                            'chunk': chapter,
+                            'display_name': f"{path.stem} - {chapter['title']}"
+                        })
+                    logger.info(f"Split {path.name} ({page_count} pages) into {len(chapters)} chunks")
+                else:
+                    docs_to_add.append({'path': path, 'chunk': None})
+        else:
+            docs_to_add = [{'path': p, 'chunk': None} for p in paths]
+        
+        print(f"Adding {len(docs_to_add)} document chunks to index...", flush=True)
         
         # Use tqdm with leave=True to keep the bar visible, and position=0 for proper updating
-        for path in tqdm(paths, desc="Indexing documents", unit="doc", leave=True, position=0, dynamic_ncols=True):
+        for doc_info in tqdm(docs_to_add, desc="Indexing documents", unit="chunk", leave=True, position=0, dynamic_ncols=True):
+            path = doc_info['path']
+            chunk = doc_info['chunk']
+            
             if not path.exists():
                 logger.warning("File not found: %s", path)
                 continue
             
             try:
-                await docs.aadd(path, settings=settings)
+                # If chunk specified, add with chunk metadata for Paper-QA2
+                if chunk:
+                    # Paper-QA2 will handle the chunking internally based on docname
+                    display_name = doc_info.get('display_name', path.name)
+                    await docs.aadd(
+                        path,
+                        settings=settings,
+                        docname=display_name,
+                        chunk_chars=chunk.get('chunk_chars', 5000)
+                    )
+                else:
+                    await docs.aadd(path, settings=settings)
+                
                 added += 1
-                logger.info("Added document: %s", path.name)
+                logger.info("Added document: %s", doc_info.get('display_name', path.name))
             except Exception as e:
                 logger.error("Failed to add document %s: %s", path.name, e)
                 tqdm.write(f"⚠ Failed to add {path.name}: {e}")
         
-        print(f"\n✓ Successfully indexed {added}/{len(paths)} documents\n")
-        logger.info("Added %d documents to the index", added)
+        print(f"\n✓ Successfully indexed {added}/{len(docs_to_add)} chunks\n", flush=True)
+        logger.info("Added %d chunks to the index", added)
         
         # Save the index cache after adding documents
         if added > 0:
-            print("Saving index cache...")
+            print("Saving index cache...", flush=True)
             self._save_index_cache()
-            print("✓ Index cache saved\n")
+            print("✓ Index cache saved\n", flush=True)
         
         return added
     
@@ -595,6 +807,7 @@ class RAGAgent:
         
         # Auto-sync from Mendeley if enabled and not already synced
         if self.auto_sync and not self._synced:
+            print("Syncing references and preparing documents...", flush=True)
             logger.info("Auto-syncing references from Mendeley...")
             self.sync_references()
             self._synced = True
@@ -605,17 +818,17 @@ class RAGAgent:
         # Add documents if not already added
         docs = await self._get_docs()
         if not self._documents_added:
-            print("Indexing documents...")
+            print("Indexing documents...", flush=True)
             await self.add_documents()
             self._documents_added = True
         
         settings = self._get_settings()
         
         # Print query progress information
-        print(f"\nProcessing query: {question}")
-        print(f"Evidence chunks to retrieve: {settings.answer.evidence_k}")
-        print(f"Estimated LLM calls: {settings.answer.evidence_k + 1}")
-        print("\nThis may take 30-60 seconds...\n")
+        print(f"\nProcessing query: {question}", flush=True)
+        print(f"Evidence chunks to retrieve: {settings.answer.evidence_k}", flush=True)
+        print(f"Estimated LLM calls: {settings.answer.evidence_k + 1}", flush=True)
+        print("\nThis may take 30-60 seconds...\n", flush=True)
         
         # Run the query
         answer = await docs.aquery(question, settings=settings)
