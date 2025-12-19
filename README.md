@@ -131,6 +131,7 @@ asyncio.run(main())
 | `MENDELEY_ACCESS_TOKEN` | OAuth2 access token (obtained via `auth` command) |
 | `MENDELEY_REFRESH_TOKEN` | OAuth2 refresh token (obtained via `auth` command) |
 | `GEMINI_API_KEY` | Your Google Gemini API key |
+| `EMBEDDING_MODEL` | (Optional) Embedding model to use (default: `models/embedding-001`) |
 
 ## Project Structure
 
