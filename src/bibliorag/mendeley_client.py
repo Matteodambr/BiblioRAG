@@ -323,8 +323,14 @@ class MendeleyClient:
                         safe_ext = "pdf"
                     
                     safe_filename = f"{safe_base}.{safe_ext}"
-                    
                     output_path = self.config.references_dir / safe_filename
+                    
+                    # Handle filename collisions by appending a counter
+                    counter = 1
+                    while output_path.exists():
+                        safe_filename = f"{safe_base}_{counter}.{safe_ext}"
+                        output_path = self.config.references_dir / safe_filename
+                        counter += 1
                     
                     try:
                         self.download_file(file_id, output_path)
