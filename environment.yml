@@ -1,0 +1,19 @@
+name: bibliorag
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python>=3.10,<3.13
+  - pip
+  - pip:
+    # Mendeley API
+    - requests>=2.31.0
+    - requests-oauthlib>=1.3.1
+    # Paper-QA2 for RAG
+    - paper-qa>=5.0.0
+    # Google Gemini
+    - google-generativeai>=0.8.0
+    - litellm>=1.0.0
+    # Utilities
+    - python-dotenv>=1.0.0
+    - pydantic>=2.0.0

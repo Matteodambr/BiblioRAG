@@ -15,17 +15,62 @@ BiblioRAG is a Python wrapper to handle high-accuracy retrieval augmented genera
 
 ## Installation
 
+### Prerequisites
+
+Install [Miniconda](https://docs.conda.io/en/latest/miniconda.html) or [Anaconda](https://www.anaconda.com/download) if you don't have conda installed.
+
+### Quick Setup (Recommended)
+
+Clone the repository and run the setup script:
+
+```bash
+git clone https://github.com/Matteodambr/BiblioRAG.git
+cd BiblioRAG
+```
+
+**On Linux/macOS:**
+```bash
+chmod +x setup_env.sh
+./setup_env.sh
+```
+
+**On Windows:**
+```cmd
+setup_env.bat
+```
+
+The setup script will:
+1. Create a conda environment named `bibliorag`
+2. Install all dependencies
+3. Install the BiblioRAG package
+4. Create a `.env` file from the template
+
+### Manual Installation
+
+If you prefer to set up manually:
+
 ```bash
 # Clone the repository
 git clone https://github.com/Matteodambr/BiblioRAG.git
 cd BiblioRAG
 
-# Create a virtual environment (recommended)
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+# Create and activate conda environment
+conda env create -f environment.yml
+conda activate bibliorag
 
 # Install the package
 pip install -e .
+
+# Copy environment template
+cp .env.example .env
+```
+
+### Activating the Environment
+
+After initial setup, activate the environment before using BiblioRAG:
+
+```bash
+conda activate bibliorag
 ```
 
 ## Configuration
@@ -186,6 +231,9 @@ BiblioRAG/
 │       └── rag_agent.py     # RAG agent wrapper
 ├── references/              # Downloaded PDF files (gitignored)
 ├── responses/               # Saved query responses (gitignored)
+├── environment.yml          # Conda environment specification
+├── setup_env.sh            # Setup script for Linux/macOS
+├── setup_env.bat           # Setup script for Windows
 ├── .env.example            # Example environment configuration
 ├── .gitignore
 ├── LICENSE
