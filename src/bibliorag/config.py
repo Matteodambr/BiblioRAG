@@ -34,12 +34,16 @@ class GeminiConfig:
     """Configuration for Google Gemini API."""
     
     api_key: str = ""
-    model_name: str = "gemini-2.0-flash"
+    model_name: str = "gemini-2.5-flash"
     
     def __post_init__(self) -> None:
         """Load from environment if not set."""
         if not self.api_key:
             self.api_key = os.getenv("GEMINI_API_KEY", "")
+        
+        env_model = os.getenv("GEMINI_MODEL", "")
+        if env_model:
+            self.model_name = env_model
 
 
 @dataclass
