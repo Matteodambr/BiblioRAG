@@ -38,6 +38,7 @@ env/
 
 # BiblioRAG specific
 references/
+responses/
 .bibliorag_state.json
 
 # Testing

@@ -55,6 +55,7 @@ class Config:
     
     # Paths
     references_dir: Path = field(default_factory=lambda: Path("references"))
+    responses_dir: Path = field(default_factory=lambda: Path("responses"))
     state_file: Path = field(default_factory=lambda: Path(".bibliorag_state.json"))
     
     def __post_init__(self) -> None:
@@ -70,12 +71,15 @@ class Config:
         # Ensure paths are Path objects
         if isinstance(self.references_dir, str):
             self.references_dir = Path(self.references_dir)
+        if isinstance(self.responses_dir, str):
+            self.responses_dir = Path(self.responses_dir)
         if isinstance(self.state_file, str):
             self.state_file = Path(self.state_file)
     
     def ensure_directories(self) -> None:
         """Create necessary directories."""
         self.references_dir.mkdir(parents=True, exist_ok=True)
+        self.responses_dir.mkdir(parents=True, exist_ok=True)
     
     @classmethod
     def from_env(cls) -> "Config":

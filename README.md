@@ -5,11 +5,13 @@ BiblioRAG is a Python wrapper to handle high-accuracy retrieval augmented genera
 ## Features
 
 - **Mendeley Sync**: Automatically sync your Mendeley library, detecting new and updated references
+- **Auto-Sync on Query**: References are automatically synced before each query session
 - **Smart Downloads**: Only download new or changed files to the `references/` folder
 - **RAG-Powered Q&A**: Ask questions about your papers using Paper-QA2
 - **Summarization**: Generate summaries across your document collection
 - **Contradiction Detection**: Find conflicting findings across papers
 - **Gemini Integration**: Uses Google Gemini Pro for high-quality responses
+- **Response Logging**: All interactions are automatically saved to the `responses/` folder with citations, model info, and full responses
 
 ## Installation
 
@@ -55,29 +57,20 @@ bibliorag auth
 
 Follow the prompts to complete OAuth2 authentication. Save the tokens in your `.env` file.
 
-### 2. Sync References
+### 2. Query Your References
 
-Download new or updated references from your Mendeley library:
-
-```bash
-bibliorag sync
-```
-
-This will:
-- Fetch your document list from Mendeley
-- Detect new or updated documents
-- Download associated PDF files to the `references/` folder
-- Track sync state to avoid re-downloading unchanged files
-
-### 3. Query Your References
-
-Ask questions about your papers:
+Ask questions about your papers (references are automatically synced):
 
 ```bash
 bibliorag query "What are the main methods used for X?"
 ```
 
-### 4. Generate Summaries
+Each query will:
+- Automatically sync new/updated references from Mendeley
+- Display citations at the top of the response
+- Save the full interaction to the `responses/` folder
+
+### 3. Generate Summaries
 
 Summarize the key findings across your documents:
 
@@ -88,12 +81,20 @@ bibliorag summarize
 bibliorag summarize --focus "What are the main contributions in the field of X?"
 ```
 
-### 5. Find Contradictions
+### 4. Find Contradictions
 
 Identify conflicting findings across your papers:
 
 ```bash
 bibliorag contradictions
+```
+
+### 5. Manual Sync (Optional)
+
+You can also manually sync references if needed:
+
+```bash
+bibliorag sync
 ```
 
 ## Programmatic Usage
@@ -102,24 +103,54 @@ You can also use BiblioRAG as a library:
 
 ```python
 import asyncio
-from bibliorag import Config, MendeleyClient, RAGAgent
+from bibliorag import Config, RAGAgent
 
 # Load configuration
 config = Config.from_env()
 
-# Sync Mendeley references
-client = MendeleyClient(config)
-updated_docs, downloaded_files = client.sync_references()
-
-# Query your documents
+# Query your documents (auto-syncs and saves responses by default)
 async def main():
-    agent = RAGAgent(config)
-    await agent.add_documents()
+    agent = RAGAgent(config)  # auto_sync=True, save_responses=True by default
     
     result = await agent.query("What is the relationship between X and Y?")
-    print(result.answer)
+    
+    # Access citations
+    print("Citations:", result.get_citations())
+    print("Model:", result.model)
+    print("Answer:", result.answer)
 
 asyncio.run(main())
+```
+
+### Response File Format
+
+Each saved response follows this format:
+
+```
+================================================================================
+BIBLIORAG QUERY RESPONSE
+================================================================================
+
+PROMPT:
+----------------------------------------
+<your question>
+
+MODEL:
+----------------------------------------
+gemini-1.5-pro
+
+CITATIONS:
+----------------------------------------
+  [1] paper1.pdf
+  [2] paper2.pdf
+
+RESPONSE:
+----------------------------------------
+<the answer>
+
+================================================================================
+Timestamp: 2024-01-15T10:30:00
+================================================================================
 ```
 
 ## Environment Variables
@@ -145,6 +176,7 @@ BiblioRAG/
 │       ├── mendeley_client.py  # Mendeley API client
 │       └── rag_agent.py     # RAG agent wrapper
 ├── references/              # Downloaded PDF files (gitignored)
+├── responses/               # Saved query responses (gitignored)
 ├── .env.example            # Example environment configuration
 ├── .gitignore
 ├── LICENSE

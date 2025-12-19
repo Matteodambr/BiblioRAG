@@ -166,25 +166,31 @@ def cmd_query(args: argparse.Namespace) -> int:
 
 async def _async_query(config: Config, question: str) -> int:
     """Run the query asynchronously."""
-    agent = RAGAgent(config)
+    agent = RAGAgent(config, auto_sync=True, save_responses=True)
     
     try:
-        # Add documents from references directory
-        count = await agent.add_documents()
-        if count == 0:
-            print("Warning: No documents in the index.")
-            print("Run 'bibliorag sync' first to download references.")
-        
-        # Run the query
+        # Run the query (auto-syncs and adds documents automatically)
+        print("Syncing references and preparing documents...")
         result = await agent.query(question)
         
-        print(f"\nQuestion: {result.question}")
-        print(f"\nAnswer:\n{result.answer}")
+        # Print with citations at the top
+        print("\n" + "=" * 60)
+        print("CITATIONS:")
+        print("-" * 60)
+        citations = result.get_citations()
+        if citations:
+            for i, citation in enumerate(citations, 1):
+                print(f"  [{i}] {citation}")
+        else:
+            print("  No citations available")
         
-        if result.context:
-            print("\nSources:")
-            for ctx in result.context:
-                print(f"  - {ctx.get('doc_name', 'Unknown')}")
+        print("\n" + "=" * 60)
+        print(f"Question: {result.question}")
+        print("-" * 60)
+        print(f"\nAnswer:\n{result.answer}")
+        print("\n" + "=" * 60)
+        print(f"Model: {result.model}")
+        print(f"Response saved to: {config.responses_dir}/")
         
         return 0
     except Exception as e:
@@ -207,20 +213,31 @@ def cmd_summarize(args: argparse.Namespace) -> int:
 
 async def _async_summarize(config: Config, focus: Optional[str]) -> int:
     """Run the summarization asynchronously."""
-    agent = RAGAgent(config)
+    agent = RAGAgent(config, auto_sync=True, save_responses=True)
     
     try:
-        # Add documents from references directory
-        count = await agent.add_documents()
-        if count == 0:
-            print("Warning: No documents in the index.")
-            print("Run 'bibliorag sync' first to download references.")
-        
-        # Run the summary
+        # Run the summary (auto-syncs and adds documents automatically)
+        print("Syncing references and preparing documents...")
         result = await agent.summarize(focus)
         
-        print("\nSummary:")
+        # Print with citations at the top
+        print("\n" + "=" * 60)
+        print("CITATIONS:")
+        print("-" * 60)
+        citations = result.get_citations()
+        if citations:
+            for i, citation in enumerate(citations, 1):
+                print(f"  [{i}] {citation}")
+        else:
+            print("  No citations available")
+        
+        print("\n" + "=" * 60)
+        print("Summary:")
+        print("-" * 60)
         print(result.answer)
+        print("\n" + "=" * 60)
+        print(f"Model: {result.model}")
+        print(f"Response saved to: {config.responses_dir}/")
         
         return 0
     except Exception as e:
@@ -243,20 +260,31 @@ def cmd_contradictions(args: argparse.Namespace) -> int:
 
 async def _async_contradictions(config: Config) -> int:
     """Find contradictions asynchronously."""
-    agent = RAGAgent(config)
+    agent = RAGAgent(config, auto_sync=True, save_responses=True)
     
     try:
-        # Add documents from references directory
-        count = await agent.add_documents()
-        if count == 0:
-            print("Warning: No documents in the index.")
-            print("Run 'bibliorag sync' first to download references.")
-        
-        # Find contradictions
+        # Find contradictions (auto-syncs and adds documents automatically)
+        print("Syncing references and preparing documents...")
         result = await agent.find_contradictions()
         
-        print("\nContradictions Analysis:")
+        # Print with citations at the top
+        print("\n" + "=" * 60)
+        print("CITATIONS:")
+        print("-" * 60)
+        citations = result.get_citations()
+        if citations:
+            for i, citation in enumerate(citations, 1):
+                print(f"  [{i}] {citation}")
+        else:
+            print("  No citations available")
+        
+        print("\n" + "=" * 60)
+        print("Contradictions Analysis:")
+        print("-" * 60)
         print(result.answer)
+        print("\n" + "=" * 60)
+        print(f"Model: {result.model}")
+        print(f"Response saved to: {config.responses_dir}/")
         
         return 0
     except Exception as e:
