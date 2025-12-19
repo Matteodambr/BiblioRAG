@@ -1,10 +1,11 @@
 @echo off
 REM Setup script for BiblioRAG on Windows
-REM This script creates and activates the conda environment
+REM This script creates and activates the conda environment and sets up Ollama
 
 setlocal enabledelayedexpansion
 
 set ENV_NAME=bibliorag
+set OLLAMA_MODEL=nomic-embed-text
 
 echo ==========================================
 echo BiblioRAG Environment Setup
@@ -55,16 +56,66 @@ if not exist .env (
 
 echo.
 echo ==========================================
+echo Setting up Ollama for local embeddings
+echo ==========================================
+
+REM Check if Ollama is installed
+where ollama >nul 2>nul
+if %ERRORLEVEL% neq 0 (
+    echo Ollama is not installed.
+    echo.
+    echo Please download and install Ollama from:
+    echo   https://ollama.ai/download/windows
+    echo.
+    echo After installation, run this script again or manually run:
+    echo   ollama pull %OLLAMA_MODEL%
+    echo.
+    set /p INSTALL_OLLAMA="Would you like to open the Ollama download page? (y/n) "
+    if /i "!INSTALL_OLLAMA!"=="y" (
+        start https://ollama.ai/download/windows
+    )
+    goto :skip_ollama
+)
+
+echo Ollama is installed.
+
+REM Check if Ollama service is running by attempting to connect
+curl -s http://localhost:11434/api/tags >nul 2>nul
+if %ERRORLEVEL% neq 0 (
+    echo Starting Ollama service...
+    start /B ollama serve
+    echo Waiting for Ollama to be ready...
+    timeout /t 5 /nobreak >nul
+)
+
+REM Check if model is already pulled
+ollama list | findstr /C:"%OLLAMA_MODEL%" >nul 2>nul
+if %ERRORLEVEL% equ 0 (
+    echo Model '%OLLAMA_MODEL%' is already downloaded.
+) else (
+    echo Pulling embedding model '%OLLAMA_MODEL%'...
+    ollama pull %OLLAMA_MODEL%
+    echo Model downloaded successfully!
+)
+
+:skip_ollama
+
+echo.
+echo ==========================================
 echo Setup complete!
 echo ==========================================
 echo.
 echo To activate the environment in the future, run:
 echo   conda activate %ENV_NAME%
 echo.
+echo To start Ollama (if not running), run:
+echo   ollama serve
+echo.
 echo Next steps:
 echo   1. Edit .env with your Mendeley and Gemini API credentials
-echo   2. Run 'bibliorag auth' to authenticate with Mendeley
-echo   3. Run 'bibliorag query "your question"' to query your references
+echo   2. Run 'bibliorag test' to verify embedding and LLM setup
+echo   3. Run 'bibliorag auth' to authenticate with Mendeley
+echo   4. Run 'bibliorag query "your question"' to query your references
 echo.
 
 endlocal

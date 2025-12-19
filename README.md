@@ -18,19 +18,14 @@ BiblioRAG is a Python wrapper to handle high-accuracy retrieval augmented genera
 
 1. Install [Miniconda](https://docs.conda.io/en/latest/miniconda.html) or [Anaconda](https://www.anaconda.com/download) if you don't have conda installed.
 
-2. Install [Ollama](https://ollama.ai/) for local embeddings:
-   - **Linux**: `curl -fsSL https://ollama.ai/install.sh | sh`
-   - **macOS**: Download from [ollama.ai](https://ollama.ai/)
-   - **Windows**: Download from [ollama.ai](https://ollama.ai/)
-
-3. Pull the nomic embedding model:
-   ```bash
-   ollama pull nomic-embed-text
-   ```
-
 ### Quick Setup (Recommended)
 
-Clone the repository and run the setup script:
+Clone the repository and run the setup script. The setup script will automatically:
+- Create the conda environment
+- Install all dependencies
+- Install Ollama (if not already installed)
+- Pull the nomic-embed-text embedding model
+- Start the Ollama service
 
 ```bash
 git clone https://github.com/Matteodambr/BiblioRAG.git
