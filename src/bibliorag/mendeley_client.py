@@ -105,6 +105,8 @@ class SyncState:
         self.documents[doc.id] = {
             "content_hash": doc.get_content_hash(),
             "title": doc.title,
+            "authors": doc.authors,
+            "year": doc.year,
             "files": files,
             "last_synced": datetime.utcnow().isoformat(),
         }

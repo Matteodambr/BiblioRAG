@@ -4,14 +4,14 @@ BiblioRAG is a Python wrapper to handle high-accuracy retrieval augmented genera
 
 ## Features
 
-- **Mendeley Sync**: Automatically sync your Mendeley library, detecting new and updated references
-- **Auto-Sync on Query**: References are automatically synced before each query session
+- **Auto-Sync**: References are automatically synced from Mendeley before each query session
 - **Smart Downloads**: Only download new or changed files to the `references/` folder
 - **RAG-Powered Q&A**: Ask questions about your papers using Paper-QA2
 - **Summarization**: Generate summaries across your document collection
 - **Contradiction Detection**: Find conflicting findings across papers
 - **Gemini Integration**: Uses Google Gemini Pro for high-quality responses
-- **Response Logging**: All interactions are automatically saved to the `responses/` folder with citations, model info, and full responses
+- **Response Logging**: All interactions are automatically saved to the `responses/` folder
+- **Proper Citations**: Citations display author names, year, and title (not just filenames)
 
 ## Installation
 
@@ -67,7 +67,7 @@ bibliorag query "What are the main methods used for X?"
 
 Each query will:
 - Automatically sync new/updated references from Mendeley
-- Display citations at the top of the response
+- Display citations at the top of the response (with author, year, and title)
 - Save the full interaction to the `responses/` folder
 
 ### 3. Generate Summaries
@@ -89,13 +89,22 @@ Identify conflicting findings across your papers:
 bibliorag contradictions
 ```
 
-### 5. Manual Sync (Optional)
+## How It Works
 
-You can also manually sync references if needed:
+### Embedding and Indexing
 
-```bash
-bibliorag sync
-```
+BiblioRAG uses Paper-QA2 for document indexing and retrieval:
+
+- **Embedding**: Documents are embedded using the configured embedding model (default: Google's `models/embedding-001`)
+- **Incremental Processing**: Only new or updated documents are processed - existing embeddings are cached by Paper-QA2
+- **Index Storage**: Paper-QA2 maintains its own internal index for efficient retrieval
+
+### Sync State
+
+BiblioRAG tracks which documents have been synced in `.bibliorag_state.json`:
+- Document metadata (title, authors, year) for proper citation formatting
+- Content hashes to detect changes
+- File paths for downloaded PDFs
 
 ## Programmatic Usage
 
@@ -114,7 +123,7 @@ async def main():
     
     result = await agent.query("What is the relationship between X and Y?")
     
-    # Access citations
+    # Access citations (formatted with author, year, title)
     print("Citations:", result.get_citations())
     print("Model:", result.model)
     print("Answer:", result.answer)
@@ -141,8 +150,8 @@ gemini-1.5-pro
 
 CITATIONS:
 ----------------------------------------
-  [1] paper1.pdf
-  [2] paper2.pdf
+  [1] Smith et al. (2023) - Title of First Paper
+  [2] Jones & Brown (2022) - Title of Second Paper
 
 RESPONSE:
 ----------------------------------------

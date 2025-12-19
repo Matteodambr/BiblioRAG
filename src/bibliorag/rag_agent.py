@@ -1,4 +1,5 @@
 """RAG agent wrapper for Paper-QA2 with Gemini integration."""
+import json
 import logging
 import os
 from dataclasses import dataclass, field
@@ -11,6 +12,74 @@ from bibliorag.config import Config
 logger = logging.getLogger(__name__)
 
 
+def _load_document_metadata(state_file: Path) -> dict[str, dict[str, Any]]:
+    """Load document metadata from sync state file.
+    
+    Returns a mapping from filename to document metadata (title, authors, year).
+    """
+    if not state_file.exists():
+        return {}
+    
+    try:
+        with open(state_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        
+        metadata = {}
+        for doc_id, doc_data in data.get("documents", {}).items():
+            for file_path in doc_data.get("files", []):
+                filename = Path(file_path).name
+                metadata[filename] = {
+                    "title": doc_data.get("title", "Unknown"),
+                    "authors": doc_data.get("authors", []),
+                    "year": doc_data.get("year"),
+                }
+        return metadata
+    except (json.JSONDecodeError, IOError) as e:
+        logger.warning("Failed to load document metadata: %s", e)
+        return {}
+
+
+def _format_citation(filename: str, metadata: dict[str, dict[str, Any]]) -> str:
+    """Format a citation using title and authors if available.
+    
+    Args:
+        filename: The PDF filename.
+        metadata: Mapping from filename to document metadata.
+        
+    Returns:
+        Formatted citation string (e.g., "Smith et al. (2023) - Title of Paper").
+    """
+    if filename not in metadata:
+        return filename
+    
+    doc_meta = metadata[filename]
+    title = doc_meta.get("title", "Unknown")
+    authors = doc_meta.get("authors", [])
+    year = doc_meta.get("year")
+    
+    # Format authors - handle both 'last_name' and 'surname' field names
+    # Mendeley API uses 'last_name' and 'first_name'
+    def get_last_name(author: dict) -> str:
+        """Extract last name from author dict, handling different field names."""
+        return author.get("last_name") or author.get("surname") or author.get("name", "Unknown")
+    
+    if authors:
+        if len(authors) == 1:
+            author_str = get_last_name(authors[0])
+        elif len(authors) == 2:
+            author_str = f"{get_last_name(authors[0])} & {get_last_name(authors[1])}"
+        else:
+            author_str = f"{get_last_name(authors[0])} et al."
+    else:
+        author_str = "Unknown"
+    
+    # Build citation
+    if year:
+        return f"{author_str} ({year}) - {title}"
+    else:
+        return f"{author_str} - {title}"
+
+
 @dataclass
 class QueryResult:
     """Result from a RAG query."""
@@ -21,20 +90,23 @@ class QueryResult:
     cost: float = 0.0
     model: str = ""
     timestamp: str = field(default_factory=lambda: datetime.now().isoformat())
+    _doc_metadata: dict[str, dict[str, Any]] = field(default_factory=dict, repr=False)
     
     def __str__(self) -> str:
         """Return formatted answer string."""
         return f"Q: {self.question}\n\nA: {self.answer}"
     
     def get_citations(self) -> list[str]:
-        """Get list of unique citations from context."""
+        """Get list of unique citations from context with titles and authors."""
         citations = []
         seen = set()
         for ctx in self.context:
             doc_name = ctx.get("doc_name", "Unknown")
             if doc_name not in seen:
                 seen.add(doc_name)
-                citations.append(doc_name)
+                # Format citation with title and authors
+                formatted = _format_citation(doc_name, self._doc_metadata)
+                citations.append(formatted)
         return citations
     
     def format_for_save(self) -> str:
@@ -115,10 +187,15 @@ class RAGAgent:
         self._mendeley_client: Optional[Any] = None
         self._synced: bool = False
         self._documents_added: bool = False
+        self._doc_metadata: dict[str, dict[str, Any]] = {}
         
         # Set up Gemini API key for litellm
         if self.config.gemini.api_key:
             os.environ["GEMINI_API_KEY"] = self.config.gemini.api_key
+    
+    def _load_doc_metadata(self) -> None:
+        """Load document metadata from sync state for citation formatting."""
+        self._doc_metadata = _load_document_metadata(self.config.state_file)
     
     def _get_mendeley_client(self) -> Any:
         """Get or create Mendeley client for auto-sync."""
@@ -280,6 +357,9 @@ class RAGAgent:
             self.sync_references()
             self._synced = True
         
+        # Load document metadata for citation formatting
+        self._load_doc_metadata()
+        
         # Add documents if not already added
         docs = await self._get_docs()
         if not self._documents_added:
@@ -307,6 +387,7 @@ class RAGAgent:
             context=context,
             cost=answer.cost if hasattr(answer, "cost") else 0.0,
             model=self.config.gemini.model_name,
+            _doc_metadata=self._doc_metadata,
         )
         
         # Save response if enabled
