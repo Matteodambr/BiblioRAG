@@ -2,6 +2,15 @@
 
 BiblioRAG is a Python wrapper to handle high-accuracy retrieval augmented generation (RAG) from your Mendeley library. This repo is built on top of the Mendeley API and on Paper-QA2, to automatically retrieve your reference lists, and perform RAG actions on them, such as question answering.
 
+## Default Models
+
+BiblioRAG uses the following models by default:
+
+- **LLM (Language Model)**: `gemini-1.5-pro` - Google's Gemini Pro model for high-quality responses
+- **Embedding Model**: `nomic-embed-text` - Local embeddings via Ollama (no API key required)
+
+These can be customized via environment variables. See the [Configuration](#configuration) section for details.
+
 ## Features
 
 - **Auto-Sync**: References are automatically synced from Mendeley before each query session
