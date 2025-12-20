@@ -1,7 +1,9 @@
 """RAG agent wrapper for Paper-QA2 with Gemini integration."""
+import hashlib
 import json
 import logging
 import os
+import pickle
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -10,6 +12,194 @@ from typing import Any, Optional
 from bibliorag.config import Config
 
 logger = logging.getLogger(__name__)
+
+# Suppress noisy pypdf warnings
+logging.getLogger('pypdf._reader').setLevel(logging.ERROR)
+
+
+def _get_pdf_outline(pdf_path: Path) -> list[dict]:
+    """Extract outline/bookmarks from a PDF.
+    
+    Args:
+        pdf_path: Path to the PDF file.
+        
+    Returns:
+        List of outline entries with 'title' and 'page' keys.
+    """
+    try:
+        from pypdf import PdfReader
+        
+        reader = PdfReader(pdf_path)
+        outline = reader.outline
+        
+        if not outline:
+            return []
+        
+        entries = []
+        
+        def extract_entries(items, level=0):
+            """Recursively extract outline entries."""
+            for item in items:
+                if isinstance(item, list):
+                    extract_entries(item, level + 1)
+                else:
+                    try:
+                        # Get destination page
+                        page_num = reader.get_destination_page_number(item) + 1  # 1-indexed
+                        entries.append({
+                            'title': item.title if hasattr(item, 'title') else str(item),
+                            'page': page_num,
+                            'level': level
+                        })
+                    except Exception:
+                        continue
+        
+        extract_entries(outline)
+        return entries
+        
+    except Exception as e:
+        logger.warning(f"Could not extract outline from {pdf_path.name}: {e}")
+        return []
+
+
+def _get_pdf_page_count(pdf_path: Path) -> int:
+    """Get number of pages in a PDF.
+    
+    Args:
+        pdf_path: Path to the PDF file.
+        
+    Returns:
+        Number of pages, or 0 if error.
+    """
+    try:
+        from pypdf import PdfReader
+        reader = PdfReader(pdf_path)
+        return len(reader.pages)
+    except Exception as e:
+        logger.warning(f"Could not get page count for {pdf_path.name}: {e}")
+        return 0
+
+
+def _split_pdf_into_chunks(pdf_path: Path, chunk_size_pages: int = 50) -> list[dict]:
+    """Split a PDF into page-range chunks.
+    
+    Args:
+        pdf_path: Path to the PDF file.
+        chunk_size_pages: Number of pages per chunk.
+        
+    Returns:
+        List of dicts with 'title', 'start_page', 'end_page' keys.
+    """
+    page_count = _get_pdf_page_count(pdf_path)
+    if page_count == 0:
+        return []
+    
+    chunks = []
+    for i in range(0, page_count, chunk_size_pages):
+        start = i + 1  # 1-indexed
+        end = min(i + chunk_size_pages, page_count)
+        chunks.append({
+            'title': f"Pages {start}-{end}",
+            'start_page': start,
+            'end_page': end
+        })
+    
+    return chunks
+
+
+def _get_pdf_chapters(pdf_path: Path, chunk_size_pages: int = 50) -> list[dict]:
+    """Get chapter divisions from PDF outline or fall back to fixed chunks.
+    
+    Args:
+        pdf_path: Path to the PDF file.
+        chunk_size_pages: Fallback chunk size if no outline.
+        
+    Returns:
+        List of dicts with 'title', 'start_page', 'end_page' keys.
+    """
+    outline = _get_pdf_outline(pdf_path)
+    
+    if not outline:
+        logger.info(f"{pdf_path.name}: No outline found, using {chunk_size_pages}-page chunks")
+        return _split_pdf_into_chunks(pdf_path, chunk_size_pages)
+    
+    page_count = _get_pdf_page_count(pdf_path)
+    
+    # Use top-level outline entries as chapters
+    top_level = [e for e in outline if e['level'] == 0]
+    
+    if not top_level:
+        logger.info(f"{pdf_path.name}: No top-level outline, using all entries")
+        top_level = outline
+    
+    # Build chapters from outline
+    chapters = []
+    for i, entry in enumerate(top_level):
+        start_page = entry['page']
+        # End page is start of next chapter, or end of PDF
+        end_page = top_level[i + 1]['page'] - 1 if i + 1 < len(top_level) else page_count
+        
+        chapters.append({
+            'title': entry['title'],
+            'start_page': start_page,
+            'end_page': end_page
+        })
+    
+    # If we have too many tiny chunks (>50 chunks for a book), merge them
+    # This happens when outline includes every subsection
+    if len(chapters) > 50:
+        logger.info(f"{pdf_path.name}: {len(chapters)} outline entries too granular, using {chunk_size_pages}-page chunks instead")
+        return _split_pdf_into_chunks(pdf_path, chunk_size_pages)
+    
+    # Filter out very small chunks (< 3 pages) by merging with next
+    filtered_chapters = []
+    i = 0
+    while i < len(chapters):
+        chapter = chapters[i]
+        chunk_size = chapter['end_page'] - chapter['start_page'] + 1
+        
+        # If chunk is too small and not the last one, try to merge with next
+        if chunk_size < 3 and i < len(chapters) - 1:
+            next_chapter = chapters[i + 1]
+            merged = {
+                'title': chapter['title'],  # Keep first title
+                'start_page': chapter['start_page'],
+                'end_page': next_chapter['end_page']
+            }
+            filtered_chapters.append(merged)
+            i += 2  # Skip next chapter since we merged it
+        else:
+            filtered_chapters.append(chapter)
+            i += 1
+    
+    logger.info(f"{pdf_path.name}: Found {len(filtered_chapters)} chapters from outline")
+    return filtered_chapters
+
+
+def _compute_documents_fingerprint(references_dir: Path) -> str:
+    """Compute a fingerprint hash of all PDFs in the references directory.
+    
+    The fingerprint includes:
+    - List of PDF filenames (sorted)
+    - File sizes
+    - Last modification times
+    
+    Returns:
+        SHA256 hash of the fingerprint data.
+    """
+    if not references_dir.exists():
+        return hashlib.sha256(b"").hexdigest()
+    
+    pdf_files = sorted(references_dir.glob("*.pdf"))
+    
+    # Build fingerprint data
+    fingerprint_parts = []
+    for pdf in pdf_files:
+        stat = pdf.stat()
+        fingerprint_parts.append(f"{pdf.name}|{stat.st_size}|{stat.st_mtime}")
+    
+    fingerprint_str = "\n".join(fingerprint_parts)
+    return hashlib.sha256(fingerprint_str.encode()).hexdigest()
 
 
 def _load_document_metadata(state_file: Path) -> dict[str, dict[str, Any]]:
@@ -189,13 +379,99 @@ class RAGAgent:
         self._documents_added: bool = False
         self._doc_metadata: dict[str, dict[str, Any]] = {}
         
-        # Set up Gemini API key for litellm
-        if self.config.gemini.api_key:
-            os.environ["GEMINI_API_KEY"] = self.config.gemini.api_key
+        # Cache-related attributes
+        self._cache_file: Path = self.config.cache_dir / "docs_index.pkl"
+        self._fingerprint_file: Path = self.config.cache_dir / "fingerprint.txt"
+        
+        # Set up API keys and URLs for litellm
+        if self.config.llm.provider == "gemini" and self.config.llm.api_key:
+            os.environ["GOOGLE_API_KEY"] = self.config.llm.api_key
+        
+        # Set up Ollama API base URL for litellm (for both LLM and embeddings)
+        if self.config.llm.provider == "ollama" or self.config.embedding.provider == "ollama":
+            os.environ["OLLAMA_API_BASE"] = self.config.embedding.ollama_url
+        
+        # Suppress verbose LiteLLM logging (errors, retries, etc.)
+        self._configure_litellm_logging()
+    
+    def _configure_litellm_logging(self) -> None:
+        """Configure LiteLLM to use less verbose logging."""
+        import logging
+        
+        # Suppress LiteLLM's verbose INFO logs
+        logging.getLogger("LiteLLM").setLevel(logging.WARNING)
+        logging.getLogger("LiteLLM Router").setLevel(logging.WARNING)
+        logging.getLogger("LiteLLM Proxy").setLevel(logging.WARNING)
+        
+        # Keep paper-qa client warnings but suppress verbose ones
+        logging.getLogger("paperqa.clients").setLevel(logging.ERROR)
     
     def _load_doc_metadata(self) -> None:
         """Load document metadata from sync state for citation formatting."""
         self._doc_metadata = _load_document_metadata(self.config.state_file)
+    
+    def _save_index_cache(self) -> None:
+        """Save the current Docs index to cache."""
+        if self._docs is None:
+            return
+        
+        try:
+            self.config.ensure_directories()
+            
+            # Save the Docs object
+            with open(self._cache_file, "wb") as f:
+                pickle.dump(self._docs, f)
+            
+            # Save the current fingerprint
+            fingerprint = _compute_documents_fingerprint(self.config.references_dir)
+            self._fingerprint_file.write_text(fingerprint)
+            
+            logger.info("Saved index cache to %s", self._cache_file)
+        except Exception as e:
+            logger.warning("Failed to save index cache: %s", e)
+    
+    def _load_index_cache(self) -> bool:
+        """Load the Docs index from cache if valid.
+        
+        Returns:
+            True if cache was loaded successfully, False otherwise.
+        """
+        # Check if cache files exist
+        if not self._cache_file.exists() or not self._fingerprint_file.exists():
+            logger.info("No index cache found")
+            return False
+        
+        try:
+            # Check if fingerprint matches (documents haven't changed)
+            cached_fingerprint = self._fingerprint_file.read_text().strip()
+            current_fingerprint = _compute_documents_fingerprint(self.config.references_dir)
+            
+            if cached_fingerprint != current_fingerprint:
+                logger.info("Document fingerprint changed, cache invalid")
+                return False
+            
+            # Load the cached Docs object
+            with open(self._cache_file, "rb") as f:
+                self._docs = pickle.load(f)
+            
+            logger.info("Loaded index from cache")
+            print("✓ Loaded index from cache (documents unchanged)\n")
+            return True
+        except Exception as e:
+            logger.warning("Failed to load index cache: %s", e)
+            return False
+    
+    def clear_cache(self) -> None:
+        """Clear the index cache."""
+        try:
+            if self._cache_file.exists():
+                self._cache_file.unlink()
+            if self._fingerprint_file.exists():
+                self._fingerprint_file.unlink()
+            logger.info("Cleared index cache")
+            print("✓ Index cache cleared")
+        except Exception as e:
+            logger.warning("Failed to clear cache: %s", e)
     
     def _get_mendeley_client(self) -> Any:
         """Get or create Mendeley client for auto-sync."""
@@ -210,12 +486,21 @@ class RAGAgent:
         Returns:
             Tuple of (updated_docs_count, downloaded_files_count).
         """
-        if not self.config.mendeley.access_token:
-            logger.warning("Mendeley not authenticated, skipping sync")
+        if not self.config.mendeley.client_id or not self.config.mendeley.client_secret:
+            logger.warning("Mendeley credentials not configured, skipping sync")
             return 0, 0
         
         try:
             client = self._get_mendeley_client()
+            
+            # Check if authenticated and connection is valid
+            try:
+                client.ensure_authenticated()
+            except RuntimeError as e:
+                logger.error(str(e))
+                print(f"\n{e}")
+                return 0, 0
+            
             updated_docs, downloaded_files = client.sync_references()
             logger.info(
                 "Synced %d documents, downloaded %d files",
@@ -272,8 +557,13 @@ class RAGAgent:
                 "pip install paper-qa"
             ) from e
         
-        # Configure Gemini model via litellm
-        model_name = f"gemini/{self.config.gemini.model_name}"
+        # Configure model based on provider
+        if self.config.llm.provider == "gemini":
+            model_name = f"gemini/{self.config.llm.model_name}"
+        elif self.config.llm.provider == "ollama":
+            model_name = f"ollama/{self.config.llm.model_name}"
+        else:
+            raise ValueError(f"Unknown LLM provider: {self.config.llm.provider}")
         
         # Configure embedding based on provider
         embedding_config = self.config.embedding
@@ -287,11 +577,100 @@ class RAGAgent:
             # Default to Ollama
             embedding = f"ollama/{embedding_config.model_name}"
         
+        logger.info(f"Creating Settings with LLM: {model_name}, embedding: {embedding}")
+        
+        # Configure LiteLLM Router with fallback support
+        # Build model list with primary model and optional fallback
+        model_list = [
+            {
+                "model_name": model_name,
+                "litellm_params": {
+                    "model": model_name,
+                    "num_retries": 2,  # Retry primary model 2 times before fallback
+                    "timeout": 60,  # 60 second timeout per request
+                }
+            }
+        ]
+        
+        # Add fallback model only if using Gemini and fallback is configured
+        if self.config.llm.provider == "gemini" and self.config.llm.fallback_model:
+            fallback_model = self.config.llm.fallback_model
+            logger.info(f"Configuring fallback model: {fallback_model}")
+            model_list.append({
+                "model_name": model_name,  # Use same name for routing
+                "litellm_params": {
+                    "model": fallback_model,
+                    "timeout": 120,  # Local models may need more time
+                }
+            })
+        
+        llm_config = {
+            "model_list": model_list,
+            "num_retries": 3,
+            "retry_after": 5,  # Wait 5 seconds before retrying
+            "fallbacks": [model_name] if (self.config.llm.provider == "gemini" and self.config.llm.fallback_model) else [],
+            "context_window_fallbacks": [model_name] if (self.config.llm.provider == "gemini" and self.config.llm.fallback_model) else [],
+        }
+        
         self._settings = Settings(
             llm=model_name,
             summary_llm=model_name,
+            llm_config=llm_config,
+            summary_llm_config=llm_config,
             embedding=embedding,
+            temperature=self.config.paperqa.temperature,
         )
+        
+        # Configure agent LLM to use Gemini instead of defaulting to GPT-4
+        self._settings.agent.agent_llm = model_name
+        self._settings.agent.agent_llm_config = llm_config
+        self._settings.agent.search_count = self.config.paperqa.search_count
+        
+        # Configure parsing enrichment LLM - can use different model for indexing
+        # This allows using fast local models (e.g., ollama/llama3.2:1b) during indexing
+        # while keeping powerful models (Gemini) for query answering
+        
+        # Check if enrichment is enabled
+        if not self.config.paperqa.use_enrichment:
+            # Disable multimodal parsing (no LLM enrichment of images/tables)
+            # Use string value instead of enum to avoid import issues
+            self._settings.parsing.multimodal = False
+            logger.info("LLM enrichment disabled - text-only indexing for faster processing")
+        else:
+            enrichment_model = self.config.llm.enrichment_model or model_name
+            
+            # If enrichment model is different from main model, create separate config
+            if enrichment_model != model_name:
+                enrichment_llm_config = {
+                    "model_list": [
+                        {
+                            "model_name": enrichment_model,
+                            "litellm_params": {
+                                "model": enrichment_model,
+                                "num_retries": 3,
+                                "timeout": 60,
+                                "api_base": os.environ.get("OLLAMA_API_BASE", "http://localhost:11434"),
+                            }
+                        }
+                    ],
+                    "num_retries": 3,
+                    "retry_after": 5,
+                }
+                logger.info(f"Using separate enrichment LLM for indexing: {enrichment_model}")
+                # When using enrichment_llm_config, set enrichment_llm to model name from config
+                self._settings.parsing.enrichment_llm = enrichment_model
+                self._settings.parsing.enrichment_llm_config = enrichment_llm_config
+            else:
+                # Use same LLM for enrichment as main model
+                self._settings.parsing.enrichment_llm = model_name
+                self._settings.parsing.enrichment_llm_config = llm_config
+        
+        # Configure answer quality settings
+        self._settings.answer.answer_max_sources = self.config.paperqa.answer_max_sources
+        self._settings.answer.evidence_k = self.config.paperqa.evidence_k
+        self._settings.answer.answer_length = self.config.paperqa.answer_length
+        self._settings.answer.evidence_summary_length = self.config.paperqa.evidence_summary_length
+        self._settings.answer.max_concurrent_requests = self.config.paperqa.max_concurrent_requests
         
         return self._settings
     
@@ -308,6 +687,13 @@ class RAGAgent:
                 "pip install paper-qa"
             ) from e
         
+        # Try to load from cache first
+        if self._load_index_cache():
+            self._documents_added = True
+            return self._docs
+        
+        # Get settings first so Docs uses the configured LLMs
+        settings = self._get_settings()
         self._docs = Docs()
         return self._docs
     
@@ -333,22 +719,76 @@ class RAGAgent:
             logger.info("No documents to add")
             return 0
         
+        from tqdm import tqdm
+        
         docs = await self._get_docs()
+        settings = self._get_settings()
         added = 0
         
-        for path in paths:
+        # Check for large PDFs and split if needed
+        docs_to_add = []
+        if self.config.paperqa.split_large_pdfs:
+            print("Analyzing documents for chunking...", flush=True)
+            for path in paths:
+                if not path.exists() or path.suffix.lower() != '.pdf':
+                    docs_to_add.append({'path': path, 'chunk': None})
+                    continue
+                
+                page_count = _get_pdf_page_count(path)
+                if page_count >= self.config.paperqa.large_pdf_pages:
+                    chapters = _get_pdf_chapters(path, self.config.paperqa.chunk_size_pages)
+                    for chapter in chapters:
+                        docs_to_add.append({
+                            'path': path,
+                            'chunk': chapter,
+                            'display_name': f"{path.stem} - {chapter['title']}"
+                        })
+                    logger.info(f"Split {path.name} ({page_count} pages) into {len(chapters)} chunks")
+                else:
+                    docs_to_add.append({'path': path, 'chunk': None})
+        else:
+            docs_to_add = [{'path': p, 'chunk': None} for p in paths]
+        
+        print(f"Adding {len(docs_to_add)} document chunks to index...", flush=True)
+        
+        # Use tqdm with leave=True to keep the bar visible, and position=0 for proper updating
+        for doc_info in tqdm(docs_to_add, desc="Indexing documents", unit="chunk", leave=True, position=0, dynamic_ncols=True):
+            path = doc_info['path']
+            chunk = doc_info['chunk']
+            
             if not path.exists():
                 logger.warning("File not found: %s", path)
                 continue
             
             try:
-                await docs.aadd(path)
+                # If chunk specified, add with chunk metadata for Paper-QA2
+                if chunk:
+                    # Paper-QA2 will handle the chunking internally based on docname
+                    display_name = doc_info.get('display_name', path.name)
+                    await docs.aadd(
+                        path,
+                        settings=settings,
+                        docname=display_name,
+                        chunk_chars=chunk.get('chunk_chars', 5000)
+                    )
+                else:
+                    await docs.aadd(path, settings=settings)
+                
                 added += 1
-                logger.info("Added document: %s", path.name)
+                logger.info("Added document: %s", doc_info.get('display_name', path.name))
             except Exception as e:
                 logger.error("Failed to add document %s: %s", path.name, e)
+                tqdm.write(f"⚠ Failed to add {path.name}: {e}")
         
-        logger.info("Added %d documents to the index", added)
+        print(f"\n✓ Successfully indexed {added}/{len(docs_to_add)} chunks\n", flush=True)
+        logger.info("Added %d chunks to the index", added)
+        
+        # Save the index cache after adding documents
+        if added > 0:
+            print("Saving index cache...", flush=True)
+            self._save_index_cache()
+            print("✓ Index cache saved\n", flush=True)
+        
         return added
     
     async def query(self, question: str) -> QueryResult:
@@ -363,8 +803,11 @@ class RAGAgent:
         Returns:
             QueryResult with the answer and context.
         """
+        from tqdm import tqdm
+        
         # Auto-sync from Mendeley if enabled and not already synced
         if self.auto_sync and not self._synced:
+            print("Syncing references and preparing documents...", flush=True)
             logger.info("Auto-syncing references from Mendeley...")
             self.sync_references()
             self._synced = True
@@ -375,10 +818,17 @@ class RAGAgent:
         # Add documents if not already added
         docs = await self._get_docs()
         if not self._documents_added:
+            print("Indexing documents...", flush=True)
             await self.add_documents()
             self._documents_added = True
         
         settings = self._get_settings()
+        
+        # Print query progress information
+        print(f"\nProcessing query: {question}", flush=True)
+        print(f"Evidence chunks to retrieve: {settings.answer.evidence_k}", flush=True)
+        print(f"Estimated LLM calls: {settings.answer.evidence_k + 1}", flush=True)
+        print("\nThis may take 30-60 seconds...\n", flush=True)
         
         # Run the query
         answer = await docs.aquery(question, settings=settings)
